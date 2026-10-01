@@ -1,0 +1,48 @@
+# Профиль интеграционных тестов: реальный PostgreSQL в Testcontainers и заглушка внешнего API курсов.
+#
+# Отличия от основной конфигурации:
+#   - ddl-auto: validate — схему создаёт Liquibase, Hibernate только сверяет её с сущностями.
+#     Значение none здесь было бы «лишней» настройкой, но с ним расхождение схемы и сущностей
+#     не проверялось ни в одном тесте: колонка CHAR(3) против varchar в сущности прошла все 63
+#     теста и упала только при ручном запуске приложения. Валидация стоит несколько миллисекунд;
+#   - settlement.processing-enabled: false — фоновая дорасчётка выключена, иначе результат проверки
+#     зависел бы от фонового потока. Тесты дорасчёта вызывают сервис напрямую;
+#   - короткие таймауты и без повторов — заглушка отвечает мгновенно, а при проверке отказа
+#     неожиданные повторы только замедляли бы тест.
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        show_sql: false
+  main:
+    banner-mode: off
+
+exchange:
+  limit:
+    timezone: UTC
+    default-sum: 1000.00
+    default-currency: USD
+  rates:
+    provider: twelvedata
+    # URL заглушки переопределяется в @DynamicPropertySource на порт WireMock.
+    base-url: http://localhost:0
+    api-key: test-key
+    connect-timeout: 1s
+    read-timeout: 2s
+    max-retries: 1
+    retry-initial-backoff: 10ms
+    retry-max-backoff: 50ms
+  settlement:
+    max-attempts: 5
+    retry-delay: 100ms
+    processing-enabled: false
+
+logging:
+  level:
+    root: WARN
+    com.idftech.exchangeservice: INFO
+    org.testcontainers: WARN
+    org.springframework.test: WARN
+    liquibase: WARN

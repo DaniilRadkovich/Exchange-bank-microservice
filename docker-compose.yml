@@ -1,0 +1,48 @@
+# Запуск сервиса вместе с БД одной командой:
+#   docker compose up --build
+# Swagger UI: http://localhost:8080/swagger-ui.html
+#
+# Ключ внешнего API курсов и пароль пользователя БД только для чтения задаются окружением:
+#   RATES_API_KEY=... EXCHANGE_READONLY_PASSWORD=... docker compose up --build
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: exchange
+      POSTGRES_USER: exchange
+      POSTGRES_PASSWORD: exchange
+      # Пароль пользователя только для чтения, которым подключается MCP-сервер агента.
+      # Значение по умолчанию — для локального запуска; в общем окружении задаётся
+      # переменной окружения и в репозиторий не попадает.
+      EXCHANGE_READONLY_PASSWORD: ${EXCHANGE_READONLY_PASSWORD:-readonly-local}
+    ports:
+      - "5432:5432"
+    volumes:
+      - exchange-pgdata:/var/lib/postgresql/data
+      # Скрипты инициализации выполняются один раз, при первом запуске на пустом томе.
+      # Их роль — создать пользователя только для чтения для MCP-сервера агента.
+      - ./ops/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # Сервис стартует раньше готовой БД, поэтому ждёт именно её готовности.
+      test: ["CMD-SHELL", "pg_isready -U exchange -d exchange"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  exchange-service:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/exchange
+      DB_USERNAME: exchange
+      DB_PASSWORD: exchange
+      # Ключ внешнего API курсов задаётся окружением и в репозиторий не попадает.
+      RATES_API_KEY: ${RATES_API_KEY:-}
+    ports:
+      - "8080:8080"
+
+volumes:
+  exchange-pgdata:

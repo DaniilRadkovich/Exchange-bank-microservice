@@ -1,3 +1,90 @@
 spring:
   application:
     name: exchangeservice
+
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/exchange}
+    username: ${DB_USERNAME:exchange}
+    password: ${DB_PASSWORD:exchange}
+    hikari:
+      pool-name: exchange-pool
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      connection-timeout: 5000
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+          batch_size: 50
+        order_inserts: true
+        order_updates: true
+
+  liquibase:
+    change-log: classpath:db/changelog.xml
+
+  jackson:
+    default-property-inclusion: non_null
+
+  mvc:
+    problemdetails:
+      enabled: true
+
+exchange:
+  limit:
+    # Часовой пояс, в котором определяются границы календарного месяца лимита (ТЗ: указать в README).
+    timezone: UTC
+    # Лимит по умолчанию, если клиент его не устанавливал (ТЗ п.2).
+    default-sum: 1000.00
+    default-currency: USD
+  rates:
+    # Внешний провайдер дневных курсов; конкретный API выбирается в README.
+    provider: twelvedata
+    base-url: ${RATES_API_BASE_URL:https://api.twelvedata.com}
+    api-key: ${RATES_API_KEY:}
+    connect-timeout: 2s
+    read-timeout: 3s
+    # Число повторов при 5xx/таймауте; задержка растёт экспоненциально.
+    max-retries: 3
+    retry-initial-backoff: 200ms
+    retry-max-backoff: 2s
+  settlement:
+    # Максимальная глубина повторной обработки транзакций в статусе PENDING/FAILED.
+    max-attempts: 5
+    retry-delay: 5s
+    # Фоновая дорасчётка транзакций. В тестах выключается (см. application-test.yaml),
+    # чтобы результат проверки не зависел от фонового потока.
+    processing-enabled: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+  api-docs:
+    path: /v3/api-docs
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+  observations:
+    key-values:
+      application: ${spring.application.name}
+
+logging:
+  level:
+    root: INFO
+    com.idftech.exchangeservice: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] %logger{36} - %msg%n"
