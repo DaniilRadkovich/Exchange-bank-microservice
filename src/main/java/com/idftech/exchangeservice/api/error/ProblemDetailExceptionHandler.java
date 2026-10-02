@@ -1,5 +1,6 @@
 package com.idftech.exchangeservice.api.error;
 
+import com.idftech.exchangeservice.application.exception.ConflictException;
 import com.idftech.exchangeservice.application.exception.ResourceNotFoundException;
 import com.idftech.exchangeservice.application.exception.UnprocessableEntityException;
 import jakarta.validation.ConstraintViolation;
@@ -211,6 +212,16 @@ public class ProblemDetailExceptionHandler {
     ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
     problem.setType(UNPROCESSABLE_TYPE);
     problem.setTitle("Данные неприемлемы");
+    problem.setProperty("reason", e.getReason());
+    return problem;
+  }
+
+  /** Запись уже существует в запрошенном состоянии: 409. */
+  @ExceptionHandler(ConflictException.class)
+  public ProblemDetail handleConflict(ConflictException e) {
+    ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+    problem.setType(CONFLICT_TYPE);
+    problem.setTitle("Конфликт данных");
     problem.setProperty("reason", e.getReason());
     return problem;
   }

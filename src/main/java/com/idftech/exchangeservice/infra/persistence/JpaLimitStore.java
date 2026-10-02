@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.time.YearMonth;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,6 +43,13 @@ public class JpaLimitStore implements LimitStore {
   @Transactional(readOnly = true)
   public List<ExpenseLimit> findAllByAccount(String accountFrom) {
     return repository.findAllByAccount(accountFrom).stream().map(this::toDomain).toList();
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<ExpenseLimit> findAtInstant(
+      String accountFrom, ExpenseCategory category, Instant limitDatetime) {
+    return repository.findAtInstant(accountFrom, category, limitDatetime).map(this::toDomain);
   }
 
   @Override

@@ -1,10 +1,13 @@
 package com.idftech.exchangeservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.idftech.exchangeservice.application.LimitCommandService;
 import com.idftech.exchangeservice.application.LimitQueryService;
 import com.idftech.exchangeservice.application.TransactionIntakeService;
+import com.idftech.exchangeservice.application.exception.ConflictException;
 import com.idftech.exchangeservice.domain.ExceededTransaction;
 import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseTransaction;
@@ -16,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 
 /**
  * Сценарии из таблицы ТЗ п.4, выполненные на настоящей БД.
@@ -317,6 +321,52 @@ class LimitScenarioIntegrationTest extends AbstractIntegrationTest {
     // А вот операция после понижения — под новым порогом 1000. Накопленный итог месяца (1300)
     // считается с операции от 05.01, поэтому флаг уже превышения.
     assertThat(flagOf(send("2022-01-11", "100.00"))).isTrue();
+  }
+
+  @Test
+  @DisplayName("Второй лимит на тот же момент отклоняется: иначе превышение вернулось бы дважды")
+  void secondLimitAtTheSameInstantIsRejected() {
+    setLimitAt("2022-01-01", "1000.00");
+    settle(send("2022-01-03", "1200.00"));
+
+    // Поиск действующего лимита в SQL идёт джойном по значению момента установки. Два лимита с
+    // одинаковым limit_datetime дали бы одну и ту же превышенную операцию двумя строками.
+    Throwable conflict =
+        catchThrowable(
+            () ->
+                limitCommandService.createLimit(
+                    ACCOUNT, ExpenseCategory.PRODUCT, new BigDecimal("2000.00")));
+
+    assertThat(conflict).isInstanceOf(ConflictException.class);
+    assertThat(((ConflictException) conflict).getReason()).isEqualTo("limit_already_set");
+    assertThat(conflict.getMessage()).contains("2022-01-01T10:00Z");
+
+    assertThat(limitQueryService.findAllLimitsWithSpent(ACCOUNT)).hasSize(1);
+    assertThat(limitQueryService.findExceeded(ACCOUNT)).hasSize(1);
+  }
+
+  @Test
+  @DisplayName("Схема запрещает два лимита на один момент: джойн в SQL п.6 становится одно-значным")
+  void schemaForbidsTwoLimitsWithTheSameInstant() {
+    insertLimitRaw("2022-01-01T10:00:00Z", "1000.00");
+
+    // Страховка от гонки и от записи в обход сервиса: проверка в LimitCommandService под блокировкой
+    // периода, а уникальное ограничение — последний рубеж, на котором держится одно-значность джойна.
+    assertThatThrownBy(() -> insertLimitRaw("2022-01-01T10:00:00Z", "2000.00"))
+        .isInstanceOf(DataIntegrityViolationException.class);
+  }
+
+  private void insertLimitRaw(String instant, String sum) {
+    jdbcTemplate.update(
+        """
+        INSERT INTO expense_limit
+            (id, account_from, expense_category, limit_sum, limit_currency, limit_datetime)
+        VALUES (?, ?, 'product', ?, 'USD', CAST(? AS TIMESTAMPTZ))
+        """,
+        UUID.randomUUID(),
+        ACCOUNT,
+        new BigDecimal(sum),
+        instant);
   }
 
   private static UUID nextId() {

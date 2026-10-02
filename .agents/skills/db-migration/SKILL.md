@@ -43,7 +43,7 @@ CREATE INDEX ix_expense_transaction_period
 | Таблица | Ключевые ограничения |
 | --- | --- |
 | `expense_transaction` | `currency_code CHAR(3)`, `expense_category VARCHAR(16)`, CHECK на категорию |
-| `expense_limit` | те же ограничения на категорию, внешние ключи на счёт |
+| `expense_limit` | те же ограничения на категорию, `uc_expense_limit_instant` — один лимит на момент |
 | `exchange_rate` | уникальность `(base_currency, quote_currency, rate_date)` |
 | `spend_period_lock` | первичный ключ `(account_from, expense_category, budget_period)` |
 

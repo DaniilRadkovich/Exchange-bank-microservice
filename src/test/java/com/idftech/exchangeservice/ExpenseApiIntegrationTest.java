@@ -272,6 +272,26 @@ class ExpenseApiIntegrationTest extends AbstractIntegrationTest {
   }
 
   @Test
+  @DisplayName("Повторная установка лимита на тот же момент отвечает 409 с reason")
+  void repeatedLimitAtSameInstantConflicts() {
+    Map<String, Object> limitBody =
+        Map.of("account_from", ACCOUNT, "expense_category", "product", "limit_sum", 1000.00);
+
+    given().contentType("application/json").body(limitBody)
+        .when().post("/api/v1/limits").then().statusCode(201);
+
+    // Сумма другая, а момент установки — тот же: клиент хотел не «обновить», а поставить второй лимит
+    // на уже занятое время. Это конфликт, а не ошибка формата.
+    given().contentType("application/json")
+        .body(Map.of("account_from", ACCOUNT, "expense_category", "product", "limit_sum", 2000.00))
+        .when().post("/api/v1/limits")
+        .then()
+        .statusCode(409)
+        .contentType("application/problem+json")
+        .body("reason", equalTo("limit_already_set"));
+  }
+
+  @Test
   @DisplayName("Спецификация OpenAPI описывает все методы клиентского API")
   void openApiDocumentIsPublished() {
     String document =

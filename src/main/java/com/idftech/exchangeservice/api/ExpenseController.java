@@ -105,7 +105,10 @@ public class ExpenseController {
               + "существующего лимита не поддерживается: новый лимит — новая запись.")
   @ApiResponses({
     @ApiResponse(responseCode = "201", description = "Лимит установлен"),
-    @ApiResponse(responseCode = "400", description = "Ошибка валидации входных данных")
+    @ApiResponse(responseCode = "400", description = "Ошибка валидации входных данных"),
+    @ApiResponse(
+        responseCode = "409",
+        description = "На этот момент установки лимит уже стоит: пара «счёт + категория + момент» занята")
   })
   public ResponseEntity<LimitResponse> createLimit(@Valid @RequestBody CreateLimitRequest request) {
     ExpenseLimit created = limitCommandService.createLimit(
