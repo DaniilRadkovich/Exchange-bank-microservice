@@ -10,6 +10,7 @@ import com.idftech.exchangeservice.domain.TransactionStatus;
 import com.idftech.exchangeservice.infra.config.SettlementProperties;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -114,7 +115,7 @@ public class SettlementApplier {
     List<ExpenseTransaction> ordered =
         LimitCalculator.ordered(transactionStore.findResolvedInPeriod(accountFrom, category, period));
     List<ExpenseLimit> limits = limitStore.findLimitsInPeriod(accountFrom, category, period);
-    int updated = recomputeFlags(ordered, limits, null);
+    int updated = storeChangedFlags(ordered, limitCalculator.computeFlags(ordered, limits), null);
     log.info(
         "Period {} of account {} / {} recalculated against {} limit(s): {} flag(s) changed",
         period.value(),
@@ -187,37 +188,28 @@ public class SettlementApplier {
    * @param ordered все разрешённые операции периода, включая только что рассчитанную
    * @param limits лимиты периода
    * @param settled только что рассчитанная операция; её флаг уже записан
-   */
-  /**
-   * Пересчитывает флаги операций, чей кумулятивный итог изменился из-за вновь рассчитанной операции.
-   *
-   * <p>Флаг по ТЗ кумулятивный: он сравнивает накопленную сумму месяца «до и включая» операцию. Значит
-   * операция с ранней датой, дошедшая до расчёта позже операций с поздними датами, увеличивает
-   * накопленный итог и для них. Если такие флаги не обновлять, они навсегда остаются заниженными:
-   * пересчёт придёт следующим расчётом, но между ними клиент увидит неверный отчёт.
-   *
-   * <p>Поэтому после каждого расчёта флаги приводятся в соответствие с текущим набором операций
-   * периода. Период уже заблокирован, поэтому гонки с параллельным расчётом нет.
-   *
-   * @param ordered все разрешённые операции периода, включая только что рассчитанную
-   * @param limits лимиты периода
-   * @param settled только что рассчитанная операция; её флаг уже записан
    * @return сколько флагов изменилось
    */
   private int refreshStaleFlagsAfter(
       List<ExpenseTransaction> ordered, List<ExpenseLimit> limits, ExpenseTransaction settled) {
-    return recomputeFlags(ordered, limits, settled);
+    return storeChangedFlags(ordered, limitCalculator.computeFlags(ordered, limits), settled);
   }
 
   /**
    * Пересчитывает флаги и записывает только изменившиеся, чтобы не делать лишних UPDATE.
    *
+   * <p>Флаги приходят одним проходом {@link LimitCalculator#computeFlags(List, List)}: сумма
+   * накапливается по мере обхода, поэтому стоимость линейна по числу операций периода. Считать
+   * накопленный итог отдельно для каждой операции было бы квадратичным расчётом на каждом расчёте
+   * транзакции и на каждой смене лимита.
+   *
+   * @param flags флаги по идентификатору, посчитанные для всего периода
    * @param skip операция, чей флаг уже записан и которую надо пропустить; {@code null} — пересчитать
    *     все
    * @return сколько флагов изменилось
    */
-  private int recomputeFlags(
-      List<ExpenseTransaction> ordered, List<ExpenseLimit> limits, ExpenseTransaction skip) {
+  private int storeChangedFlags(
+      List<ExpenseTransaction> ordered, Map<UUID, Boolean> flags, ExpenseTransaction skip) {
     int updated = 0;
     for (ExpenseTransaction candidate : ordered) {
       if (skip != null && candidate.id().equals(skip.id())) {
@@ -226,8 +218,7 @@ public class SettlementApplier {
       if (!candidate.isResolved()) {
         continue;
       }
-      ExpenseLimit limitAtMoment = limitCalculator.effectiveLimit(candidate, limits);
-      boolean expected = limitCalculator.isExceeded(candidate, limitAtMoment, ordered);
+      boolean expected = Boolean.TRUE.equals(flags.get(candidate.id()));
       if (expected != Boolean.TRUE.equals(candidate.limitExceeded())) {
         transactionStore.updateSettlement(candidate.withLimitExceeded(expected));
         updated++;

@@ -1,6 +1,7 @@
 package com.idftech.exchangeservice.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import com.idftech.exchangeservice.domain.BudgetPeriod;
 import com.idftech.exchangeservice.domain.ExpenseCategory;
@@ -10,12 +11,15 @@ import com.idftech.exchangeservice.domain.TransactionStatus;
 import com.idftech.exchangeservice.infra.config.LimitProperties;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.YearMonth;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Currency;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
@@ -275,6 +279,137 @@ class LimitCalculatorTest {
       List<ExpenseTransaction> periodTransactions) {
     return calculator.isExceeded(
         transaction, calculator.effectiveLimit(transaction, limits), periodTransactions);
+  }
+
+  @Nested
+  @DisplayName("Расчёт флагов всего периода одним проходом")
+  class BatchFlags {
+
+    private static final int LARGE_PERIOD = 50_000;
+
+    @Test
+    @DisplayName("флаги периода совпадают с пооперационным расчётом по таблице ТЗ")
+    void batchMatchesPerTransactionFlagsOfSpecTable() {
+      List<ExpenseLimit> limits =
+          List.of(limit("2022-01-01", "1000.00"), limit("2022-01-10", "2000.00"));
+      List<ExpenseTransaction> period =
+          List.of(
+              usd("2022-01-02", "500.00"),
+              usd("2022-01-03", "600.00"),
+              usd("2022-01-11", "100.00"),
+              usd("2022-01-12", "700.00"),
+              usd("2022-01-13", "100.00"),
+              usd("2022-01-13", "100.00"));
+
+      assertThat(calculator.computeFlags(LimitCalculator.ordered(period), limits))
+          .containsExactlyEntriesOf(expectedFlags(period, limits));
+    }
+
+    @Test
+    @DisplayName("категории и месяцы внутри одного списка считаются независимо")
+    void batchSeparatesCategoriesAndMonths() {
+      List<ExpenseLimit> limits = List.of(limit("2022-01-01", "1000.00"));
+      List<ExpenseTransaction> period =
+          List.of(
+              usd("2022-01-10", "900.00"),
+              service("2022-01-11", "900.00"),
+              usd("2022-02-01", "900.00"),
+              service("2022-02-02", "200.00"));
+
+      Map<UUID, Boolean> flags = calculator.computeFlags(LimitCalculator.ordered(period), limits);
+
+      // Ни одна операция не превышает лимит: у product сумма 900 + 900 = 1800 в разных месяцах,
+      // но 2022-02 относится к январскому лимиту только формально — сумма месяца своя.
+      assertThat(flags).containsExactlyInAnyOrderEntriesOf(expectedFlags(period, limits));
+      assertThat(flags).containsEntry(period.get(0).id(), false);
+      assertThat(flags).containsEntry(period.get(1).id(), false);
+      assertThat(flags).containsEntry(period.get(2).id(), false);
+    }
+
+    @Test
+    @DisplayName("операция без рассчитанной суммы в USD не входит в накопленный итог")
+    void unresolvedTransactionsAreNotCounted() {
+      List<ExpenseLimit> limits = List.of(limit("2022-01-01", "1000.00"));
+      ExpenseTransaction first = usd("2022-01-10", "500.00");
+      ExpenseTransaction pending = pending("2022-01-11", "600.00");
+      ExpenseTransaction third = usd("2022-01-12", "600.00");
+
+      Map<UUID, Boolean> flags =
+          calculator.computeFlags(LimitCalculator.ordered(List.of(first, pending, third)), limits);
+
+      assertThat(flags).containsOnlyKeys(first.id(), third.id());
+      assertThat(flags.get(third.id())).isTrue();
+    }
+
+    @Test
+    @DisplayName("пересчёт большого периода линеен: 50 000 операций считаются за секунды")
+    void largePeriodIsRecalculatedWithoutQuadraticCost() {
+      List<ExpenseLimit> limits = List.of(limit("2022-01-01", "1000.00"));
+      OffsetDateTime start = OffsetDateTime.parse("2022-01-01T00:00:00Z");
+      List<ExpenseTransaction> period = new ArrayList<>(LARGE_PERIOD);
+      for (int minute = 0; minute < LARGE_PERIOD; minute++) {
+        period.add(transactionIn("USD", "10.00", start.plusMinutes(minute), BigDecimal.ONE));
+      }
+      List<ExpenseTransaction> ordered = LimitCalculator.ordered(period);
+
+      Map<UUID, Boolean> flags =
+          assertTimeoutPreemptively(
+              Duration.ofSeconds(5), () -> calculator.computeFlags(ordered, limits));
+
+      assertThat(flags).hasSize(LARGE_PERIOD);
+      // 100 операций по 10 USD ровно упираются в лимит 1000 — остаток 0 превышением не считается.
+      assertThat(flags.get(ordered.get(99).id())).isFalse();
+      assertThat(flags.get(ordered.get(100).id())).isTrue();
+      assertThat(flags.get(ordered.get(LARGE_PERIOD - 1).id())).isTrue();
+    }
+
+    /** Флаги, посчитанные пооперационно: эталон для проверки пакетного расчёта. */
+    private Map<UUID, Boolean> expectedFlags(
+        List<ExpenseTransaction> period, List<ExpenseLimit> limits) {
+      List<ExpenseTransaction> ordered = LimitCalculator.ordered(period);
+      Map<UUID, Boolean> flags = new LinkedHashMap<>();
+      for (ExpenseTransaction transaction : ordered) {
+        if (!transaction.isResolved()) {
+          continue;
+        }
+        flags.put(
+            transaction.id(),
+            calculator.isExceeded(
+                transaction, calculator.effectiveLimit(transaction, limits), ordered));
+      }
+      return flags;
+    }
+
+    private ExpenseTransaction service(String isoDate, String sum) {
+      ExpenseTransaction pending = pending(isoDate, sum);
+      return new ExpenseTransaction(
+          pending.id(),
+          pending.accountFrom(),
+          pending.accountTo(),
+          pending.currency(),
+          pending.amount(),
+          ExpenseCategory.SERVICE,
+          pending.occurredAt(),
+          BigDecimal.ONE,
+          pending.amount(),
+          TransactionStatus.RATE_RESOLVED,
+          false);
+    }
+
+    private ExpenseTransaction pending(String isoDate, String sum) {
+      return new ExpenseTransaction(
+          nextId(),
+          ACCOUNT,
+          "9999999999",
+          USD,
+          new BigDecimal(sum),
+          CATEGORY,
+          january(isoDate),
+          null,
+          null,
+          TransactionStatus.PENDING,
+          null);
+    }
   }
 
   private List<Boolean> flagsOf(List<ExpenseTransaction> transactions, List<ExpenseLimit> limits) {

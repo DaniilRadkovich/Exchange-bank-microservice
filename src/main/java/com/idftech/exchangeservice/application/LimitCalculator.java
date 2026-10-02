@@ -11,8 +11,12 @@ import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.YearMonth;
 import java.util.Currency;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Доменный сервис расчёта месячных лимитов.
@@ -98,6 +102,9 @@ public class LimitCalculator {
    * месяца или соседней категории не должны влиять на флаг. Фильтрация по периоду и категории
    * делает метод устойчивым к тому, что в переданный список попало больше, чем нужно.
    *
+   * <p>Метод считает сумму для одной операции и потому остаётся линейным. Пересчёт целого периода
+   * делает {@link #computeFlags(List, List)}, где сумма накапливается одним проходом.
+   *
    * <p>Транзакции с одинаковым временем учитываются по идентификатору, чтобы результат не зависел
    * от порядка строк в выборке.
    */
@@ -120,8 +127,46 @@ public class LimitCalculator {
    * на момент её совершения. Строгое сравнение даёт {@code false} при остатке ровно 0.
    */
   public boolean isExceeded(ExpenseTransaction transaction, ExpenseLimit effectiveLimit, List<ExpenseTransaction> orderedTransactions) {
-    BigDecimal spent = spentUpTo(orderedTransactions, transaction);
-    return spent.compareTo(effectiveLimit.limitSum()) > 0;
+    return exceeds(spentUpTo(orderedTransactions, transaction), effectiveLimit.limitSum());
+  }
+
+  /**
+   * Флаги превышения для всех разрешённых операций периода — одним проходом.
+   *
+   * <p>Флаг кумулятивный, то есть для каждой операции нужна сумма всех предшествующих. Считать её
+   * заново для каждой операции — квадратичный расчёт: месяц с тысячей операций даёт миллион
+   * сложений, а пересчёт периода выполняется на каждый расчёт транзакции и на каждую смену лимита.
+   * Здесь сумма накапливается по мере прохода, поэтому после сортировки стоимость линейная.
+   *
+   * <p>Флаги совпадают с {@link #isExceeded}: тот же состав накопленной суммы, тот же лимит на
+   * момент операции и то же строгое сравнение. Отдельного правила здесь нет намеренно — расхождение
+   * двух реализаций одного правила показалось бы клиенту как «превышение» с чужой суммой.
+   *
+   * <p>Вход принимается в порядке {@link #ordered(List)}: сумма операции включает всех, кто стоит
+   * перед ней, поэтому порядок определяет результат. Операции сгруппированы по паре «категория +
+   * месяц», поэтому смешанный список считается так же, как если бы группы приходили по очереди.
+   * Операции без рассчитанной суммы в USD в накопленный итог не входят.
+   *
+   * @param orderedTransactions операции в порядке {@link #ordered(List)}
+   * @param limitsInPeriod лимиты периода
+   * @return флаг по идентификатору каждой операции с рассчитанной суммой в USD
+   */
+  public Map<UUID, Boolean> computeFlags(
+      List<ExpenseTransaction> orderedTransactions, List<ExpenseLimit> limitsInPeriod) {
+    Map<UUID, Boolean> flags = new LinkedHashMap<>();
+    Map<SpendingScope, BigDecimal> runningTotals = new HashMap<>();
+    for (ExpenseTransaction transaction : orderedTransactions) {
+      if (transaction.amountUsd() == null) {
+        continue;
+      }
+      SpendingScope scope = new SpendingScope(transaction.category(), transaction.period());
+      BigDecimal runningTotal =
+          runningTotals.getOrDefault(scope, BigDecimal.ZERO).add(transaction.amountUsd());
+      runningTotals.put(scope, runningTotal);
+      ExpenseLimit limitAtMoment = effectiveLimit(transaction, limitsInPeriod);
+      flags.put(transaction.id(), exceeds(runningTotal, limitAtMoment.limitSum()));
+    }
+    return flags;
   }
 
   /** Порядок транзакций в периоде: по времени, при равенстве — по идентификатору для стабильности. */
@@ -142,6 +187,17 @@ public class LimitCalculator {
     int byTime = candidate.occurredAt().compareTo(target.occurredAt());
     return byTime < 0 || (byTime == 0 && LIMIT_TIE_BREAK.compare(candidate.id(), target.id()) <= 0);
   }
+
+  /** Сравнение с лимитом: накопленная сумма строго больше лимита. Единственное место правила. */
+  private static boolean exceeds(BigDecimal runningTotalUsd, BigDecimal limitSum) {
+    return runningTotalUsd.compareTo(limitSum) > 0;
+  }
+
+  /**
+   * Группа, в пределах которой суммы накапливаются: лимит в ТЗ принадлежит паре «категория +
+   * месяц», поэтому расходы соседней категории или соседнего месяца в накопленный итог не входят.
+   */
+  private record SpendingScope(ExpenseCategory category, BudgetPeriod period) {}
 
   /**
    * Порядок идентификаторов при равном времени операции — обязано совпадать с PostgreSQL.
