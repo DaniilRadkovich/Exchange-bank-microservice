@@ -29,8 +29,6 @@ public record ExpenseTransaction(
 
   /** Точность суммы в USD — два знака после точки, как в формате ответа ТЗ. */
   public static final int USD_SCALE = 2;
-  /** Точность биржевого курса при хранении и округлении суммы — HALF_UP. */
-  public static final int RATE_SCALE = 4;
 
   public ExpenseTransaction {
     Objects.requireNonNull(id, "id");
@@ -57,7 +55,13 @@ public record ExpenseTransaction(
     return status == TransactionStatus.RATE_RESOLVED && amountUsd != null;
   }
 
-  /** Копия транзакции с применённым курсом и рассчитанным флагом превышения лимита. */
+  /**
+   * Копия транзакции с применённым курсом и рассчитанным флагом превышения лимита.
+   *
+   * <p>Точность курса берётся из {@link ExchangeRate#RATE_SCALE}: собственный константы здесь нет,
+   * иначе два числа разъехались бы, а расхождение не показал бы ни один тест — округлённый до
+   * меньшей точности курс выглядит правдоподобно.
+   */
   public ExpenseTransaction resolved(BigDecimal rate, boolean exceeded) {
     return new ExpenseTransaction(
         id,
@@ -67,7 +71,7 @@ public record ExpenseTransaction(
         amount,
         category,
         occurredAt,
-        rate.setScale(RATE_SCALE, RoundingMode.HALF_UP),
+        rate.setScale(ExchangeRate.RATE_SCALE, RoundingMode.HALF_UP),
         toUsd(amount, rate),
         TransactionStatus.RATE_RESOLVED,
         exceeded);

@@ -51,7 +51,7 @@ public class ExpenseTransactionEntity {
   @Column(name = "occurred_at", nullable = false)
   private Instant occurredAt;
 
-  @Column(name = "usd_rate", precision = 19, scale = 4)
+  @Column(name = "usd_rate", precision = 19, scale = 10)
   private BigDecimal usdRate;
 
   @Column(name = "amount_usd", precision = 19, scale = 2)

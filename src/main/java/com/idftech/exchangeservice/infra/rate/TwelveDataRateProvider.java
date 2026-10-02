@@ -114,7 +114,15 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
         .body(TimeSeriesResponse.class);
   }
 
-  /** Выбирает значение за целевую дату и ближайшее предыдущее закрытие. */
+  /**
+   * Выбирает значение за целевую дату и ближайшее предыдущее закрытие.
+   *
+   * <p>Цена, которая не положительна, курсом не является: null, ноль и отрицательное значение отбрасываются,
+   * иначе в кэш попала бы запись, которую нельзя применить, а ограничение схемы {@code close_rate > 0}
+   * отвергло бы её уже в базе. Транзакция ждала бы дорасчёта до статуса {@code FAILED}, а в логе
+   * причина выглядела бы как отказ внешнего API. Нет положительной цены — нет и курса: возвращается
+   * пустой результат, и срабатывает штатный путь отложенного расчёта.
+   */
   private Optional<ExchangeRate> toExchangeRate(String baseCurrency, LocalDate date, TimeSeriesResponse response) {
     if (response.values() == null || response.values().isEmpty()) {
       log.warn("External rate provider returned no values for {}/{} on {}", baseCurrency, USD, date);
@@ -130,28 +138,41 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
         continue;
       }
       if (valueDate.equals(date)) {
+        BigDecimal close = positive(value.closeAsBigDecimal());
+        BigDecimal fallback =
+            previousClose != null ? previousClose : positive(value.previousCloseAsBigDecimal());
+        if (close == null && fallback == null) {
+          log.warn(
+              "External rate provider has no usable close for {}/{} on {}",
+              baseCurrency,
+              USD,
+              date);
+          return Optional.empty();
+        }
         return Optional.of(
             new ExchangeRate(
                 UUID.randomUUID(),
                 Currency.getInstance(baseCurrency),
                 Currency.getInstance(USD),
                 date,
-                value.closeAsBigDecimal(),
-                previousClose != null ? previousClose : value.previousCloseAsBigDecimal()));
+                close,
+                fallback));
       }
       if (valueDate.isBefore(date)) {
-        BigDecimal close = value.closeAsBigDecimal();
-        if (close != null && close.signum() > 0) {
+        BigDecimal close = positive(value.closeAsBigDecimal());
+        if (close != null) {
           previousClose = close;
         }
       }
     }
 
     // Торгов за целевую дату не было (выходной или праздник): берём последнее доступное закрытие.
-    TimeSeriesResponse.SeriesValue last = values.getLast();
-    BigDecimal fallback = last.closeAsBigDecimal();
-    if (fallback == null || fallback.signum() <= 0) {
-      fallback = last.previousCloseAsBigDecimal();
+    // Именно последнее не позже целевой даты, а не последнее в ответе: провайдеру нельзя доверять
+    // границы запроса, а закрытие будущего дня не имеет отношения к операции прошедшего дня.
+    TimeSeriesResponse.SeriesValue last = lastNotAfter(values, date);
+    BigDecimal fallback = last == null ? null : positive(last.closeAsBigDecimal());
+    if (fallback == null && last != null) {
+      fallback = positive(last.previousCloseAsBigDecimal());
     }
     if (fallback == null || fallback.signum() <= 0) {
       log.warn("External rate provider has no usable close for {}/{} on {}", baseCurrency, USD, date);
@@ -168,7 +189,30 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
             fallback));
   }
 
-  private LocalDate parseDate(String raw) {
+  /** Курс пригоден, только если цена положительна: ноль и отрицательное значение некурсовые. */
+  private static BigDecimal positive(BigDecimal value) {
+    return value != null && value.signum() > 0 ? value : null;
+  }
+
+  /** Последнее значение с датой не позже целевой, то есть самое свежее относящееся к операции. */
+  private static TimeSeriesResponse.SeriesValue lastNotAfter(
+      List<TimeSeriesResponse.SeriesValue> values, LocalDate date) {
+    TimeSeriesResponse.SeriesValue last = null;
+    LocalDate lastDate = null;
+    for (TimeSeriesResponse.SeriesValue value : values) {
+      LocalDate valueDate = parseDate(value.datetime());
+      if (valueDate == null || valueDate.isAfter(date)) {
+        continue;
+      }
+      if (lastDate == null || valueDate.isAfter(lastDate)) {
+        last = value;
+        lastDate = valueDate;
+      }
+    }
+    return last;
+  }
+
+  private static LocalDate parseDate(String raw) {
     if (raw == null || raw.isBlank()) {
       return null;
     }

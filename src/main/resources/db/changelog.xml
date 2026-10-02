@@ -7,5 +7,6 @@
 
     <include file="db/changelog/001-create-schema.sql"/>
     <include file="db/changelog/002-unique-limit-instant.sql"/>
+    <include file="db/changelog/003-rate-precision.sql"/>
 
 </databaseChangeLog>

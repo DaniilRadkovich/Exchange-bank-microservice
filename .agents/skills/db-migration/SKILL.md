@@ -57,8 +57,11 @@ CREATE INDEX ix_expense_transaction_period
   задаёт `hibernate.jdbc.time_zone: UTC` в `application.yaml` плюс адаптеры
   (`JpaLimitStore.toDomain`, `JpaTransactionStore.toDomain`), а не схема. Часовой пояс месячных
   границ — константа `BudgetPeriod.LIMIT_TIMEZONE`, он не настраивается.
-- **Деньги — `NUMERIC(19, 2)` для сумм и `NUMERIC(19, 4)` для курсов.** `double` в БД означает
-  расхождения в сравнении с лимитом.
+- **Деньги — `NUMERIC(19, 2)` для сумм и `NUMERIC(19, 10)` для курсов.** `double` в БД означает
+  расхождения в сравнении с лимитом, а `NUMERIC(19, 4)` для курса — потерю денег: курс KZT около
+  0.0025 округляется с погрешностью до 2%, а курс мельче 0.00005 обнуляется и отвергается CHECK
+  `close_rate > 0`, из-за чего валюта становится нерасчётной навсегда. Единственный источник
+  значения — `ExchangeRate.RATE_SCALE`, в схеме ему соответствует `NUMERIC(19, 10)`.
 - **Внешние ключи и индексы обязательны.** Индексы нужны на колонках, по которым идут выборки
   `findResolvedInPeriod`, `findLatestNotAfter` и запросы п.6 (`findExceededTransactions`,
   `findLimitsWithSpent`).

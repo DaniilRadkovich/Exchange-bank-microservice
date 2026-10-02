@@ -124,6 +124,69 @@ class ExchangeRateIntegrationTest extends AbstractIntegrationTest {
   }
 
   @Test
+  @DisplayName("Курс хранится с точностью выше четырёх знаков: сумма в USD не искажается")
+  void ratePrecisionBeyondFourDecimalsSurvives() {
+    // 1 KZT = 0.00251234 USD. При округлении до четырёх знаков курс становится 0.0025, и сумма
+    // 10000.00 KZT превращается в 25.00 USD вместо 25.12 — недобор четверти процента.
+    stubRate("KZT", new BigDecimal("0.00251234"));
+
+    ExpenseTransaction settled =
+        settle(intakeService.accept(
+            nextId(), ACCOUNT, "0000009999", "KZT", new BigDecimal("10000.00"),
+            ExpenseCategory.PRODUCT, utc("2022-01-10")));
+
+    assertThat(settled.usdRate()).isEqualByComparingTo("0.00251234");
+    assertThat(settled.usdRate().scale()).isEqualTo(ExchangeRate.RATE_SCALE);
+    assertThat(settled.amountUsd()).isEqualByComparingTo("25.12");
+    // Ровно то же значение лежит в БД: иначе расхождение вылезло бы только в отчёте о превышениях.
+    assertThat(usdRateInDatabase(settled.id())).isEqualByComparingTo("0.00251234");
+  }
+
+  @Test
+  @DisplayName("Курс мельче 0.0001 не обнуляется: валюта остаётся расчётной")
+  void subFourDecimalRateIsSettledInsteadOfFailing() {
+    // 1 VND ≈ 0.0000391 USD. При четырёх знаках такой курс округлялся до нуля, запись кэша
+    // отвергалась ограничением close_rate > 0, и транзакция навсегда уходила в FAILED.
+    stubRate("VND", new BigDecimal("0.0000391"));
+
+    ExpenseTransaction settled =
+        settle(intakeService.accept(
+            nextId(), ACCOUNT, "0000009999", "VND", new BigDecimal("1000000.00"),
+            ExpenseCategory.PRODUCT, utc("2022-01-10")));
+
+    assertThat(settled.status()).isEqualTo(TransactionStatus.RATE_RESOLVED);
+    assertThat(settled.usdRate()).isEqualByComparingTo("0.0000391");
+    assertThat(settled.amountUsd()).isEqualByComparingTo("39.10");
+    assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM exchange_rate WHERE base_currency = 'VND'", Integer.class))
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("Непригодная цена провайдера не пишется в кэш и не роняет расчёт")
+  void unusableProviderPriceIsNotWrittenToCache() {
+    // Биржа отдала нулевые цены: такого курса не существует. Записывать его в кэш нельзя —
+    // ограничение close_rate > 0 отвергло бы вставку, и сбой собственной схемы выглядел бы
+    // в логе как отказ внешнего API. Правильное поведение — ждать дорасчёта.
+    stubRate("VND", BigDecimal.ZERO, BigDecimal.ZERO);
+
+    ExpenseTransaction pending =
+        intakeService.accept(
+            nextId(), ACCOUNT, "0000009999", "VND", new BigDecimal("1000000.00"),
+            ExpenseCategory.PRODUCT, utc("2022-01-10"));
+
+    assertThat(intakeService.settle(pending.id()).status()).isEqualTo(TransactionStatus.PENDING);
+    assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM exchange_rate WHERE base_currency = 'VND'", Integer.class))
+        .isZero();
+  }
+
+  private BigDecimal usdRateInDatabase(java.util.UUID id) {
+    return jdbcTemplate.queryForObject(
+        "SELECT usd_rate FROM expense_transaction WHERE id = ?", BigDecimal.class, id);
+  }
+
+  @Test
   @DisplayName("Недоступность внешнего API не теряет транзакцию: она остаётся PENDING")
   void providerFailureLeavesTransactionPending() {
     stubRateProviderFailure();
@@ -303,8 +366,10 @@ class ExchangeRateIntegrationTest extends AbstractIntegrationTest {
 
     // Прежняя реализация просто возвращалась, если запись уже есть, и close оставался пустым
     // навсегда: кэш залипал на previous_close даже после появления настоящей цены закрытия.
+    // Сравнение числовое, а не через equals: значение приходит из NUMERIC(19, 10) и несёт
+    // десять знаков после точки, тогда как записано было четыре.
     assertThat(rateCache.findRate("KZT", LocalDate.parse("2022-01-10")))
-        .contains(new BigDecimal("0.0030"));
+        .hasValueSatisfying(rate -> assertThat(rate).isEqualByComparingTo("0.0030"));
   }
 
   @Test

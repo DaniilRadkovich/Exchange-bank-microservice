@@ -37,7 +37,6 @@ public class ExchangeRateService {
   private static final Logger log = LoggerFactory.getLogger(ExchangeRateService.class);
 
   private static final String USD = "USD";
-  private static final int RATE_SCALE = 4;
 
   private final RateCache rateCache;
   private final ExchangeRateProvider rateProvider;
@@ -67,7 +66,7 @@ public class ExchangeRateService {
    */
   public Optional<BigDecimal> resolveUsdRate(String currencyCode, LocalDate date) {
     if (USD.equals(currencyCode)) {
-      return Optional.of(BigDecimal.ONE.setScale(RATE_SCALE, RoundingMode.UNNECESSARY));
+      return Optional.of(BigDecimal.ONE.setScale(ExchangeRate.RATE_SCALE, RoundingMode.UNNECESSARY));
     }
 
     Optional<BigDecimal> cached = rateCache.findRate(currencyCode, date);
@@ -127,23 +126,34 @@ public class ExchangeRateService {
     return Optional.of(usableRate(rate));
   }
 
+  /**
+   * Обращается к провайдеру и кладёт курс в собственный кэш.
+   *
+   * <p>Провал провайдера и сбой записи в кэш обрабатываются по-разному, и это не формальность. Раньше
+   * оба случая ловились одним {@code catch (RuntimeException)} вокруг всей строки с {@code
+   * rateCache.save(...)}, и нарушение ограничения нашей же схемы выглядело в логе как «External rate
+   * provider failed»: операция уходила в PENDING, затем в FAILED, и никто не видел, что виновата не
+   * биржа. Сбой записи в БД теперь выходит наружу — это отказ сервиса, а не отсутствие курса.
+   */
   private Optional<BigDecimal> fetchAndCache(String currencyCode, LocalDate date) {
+    Optional<ExchangeRate> fetched;
     try {
-      Optional<ExchangeRate> rate = rateProvider.fetchDailyRate(currencyCode, date);
-      if (rate.isEmpty()) {
-        return Optional.empty();
-      }
-      rateCache.save(rate.get());
-      return Optional.of(usableRate(rate.get()));
+      fetched = rateProvider.fetchDailyRate(currencyCode, date);
     } catch (RuntimeException e) {
       // Внешний API недоступен: не роняем приём транзакций, а возвращаем пустой результат.
-      log.warn("External rate provider failed for {}/{} on {}: {}", currencyCode, USD, date, e.getMessage());
+      log.warn("External rate provider failed for {}/{} on {}: {}", currencyCode, USD, date, e.toString());
       return Optional.empty();
     }
+    if (fetched.isEmpty()) {
+      return Optional.empty();
+    }
+    rateCache.save(fetched.get());
+    return Optional.of(usableRate(fetched.get()));
   }
 
+  /** Применимый курс с точностью домена; округление по умолчанию не подходит. */
   private BigDecimal usableRate(ExchangeRate rate) {
-    return rate.applicableRate().setScale(RATE_SCALE, RoundingMode.HALF_UP);
+    return rate.applicableRate().setScale(ExchangeRate.RATE_SCALE, RoundingMode.HALF_UP);
   }
 
   private static Counter counter(MeterRegistry meterRegistry, String outcome) {

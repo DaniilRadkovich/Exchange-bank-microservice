@@ -37,10 +37,10 @@ public class ExchangeRateEntity {
   @Column(name = "rate_date", nullable = false)
   private LocalDate rateDate;
 
-  @Column(name = "close_rate", precision = 19, scale = 4)
+  @Column(name = "close_rate", precision = 19, scale = 10)
   private BigDecimal closeRate;
 
-  @Column(name = "previous_close", precision = 19, scale = 4)
+  @Column(name = "previous_close", precision = 19, scale = 10)
   private BigDecimal previousClose;
 
   @Column(name = "created_at", nullable = false, insertable = false, updatable = false)

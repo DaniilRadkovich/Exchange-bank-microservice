@@ -28,7 +28,17 @@ public record ExchangeRate(
     BigDecimal close,
     BigDecimal previousClose) {
 
-  public static final int RATE_SCALE = 4;
+  /**
+   * Точность курса при хранении и округлении — HALF_UP.
+   *
+   * <p>Десяти знаков после точки, а не четырёх: курс к USD у тенге равен примерно 0.0025, у VND — 0.00004,
+   * у IDR — 0.00006. Четыре знака дают относительную погрешность до 2% на тенге, а курс мельче
+   * половины последнего разряда обнуляется вовсе и не проходит ограничение {@code close_rate > 0} —
+   * валюта становится нерасчётной навсегда. Значение также продублировано в схеме: {@code close_rate},
+   * {@code previous_close} и {@code usd_rate} объявлены как {@code NUMERIC(19, 10)}, а {@code
+   * ddl-auto: validate} падает на старте при расхождении.
+   */
+  public static final int RATE_SCALE = 10;
 
   public ExchangeRate {
     Objects.requireNonNull(base, "base");
