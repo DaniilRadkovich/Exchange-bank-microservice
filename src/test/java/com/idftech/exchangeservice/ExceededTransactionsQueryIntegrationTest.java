@@ -1,6 +1,7 @@
 package com.idftech.exchangeservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.idftech.exchangeservice.application.LimitCommandService;
 import com.idftech.exchangeservice.application.LimitQueryService;
@@ -220,14 +221,20 @@ class ExceededTransactionsQueryIntegrationTest extends AbstractIntegrationTest {
   }
 
   @Test
-  @DisplayName("П.6: лимиты возвращаются новыми первыми")
+  @DisplayName("П.6: лимиты возвращаются новыми первыми, у каждого заполнены расход и остаток")
   void limitsAreReturnedNewestFirst() {
     setLimitAt("2022-01-01", "1000.00");
     setLimitAt("2022-01-10", "2000.00");
+    settle(send("2022-01-11", "500.00", ExpenseCategory.PRODUCT));
 
-    assertThat(limitQueryService.findAllLimits(ACCOUNT))
-        .extracting(limit -> limit.limitSum())
-        .containsExactly(new BigDecimal("2000.00"), new BigDecimal("1000.00"));
+    assertThat(limitQueryService.findAllLimitsWithSpent(ACCOUNT))
+        .extracting(
+            row -> row.limitSum(),
+            row -> row.spentUsd(),
+            row -> row.remainingUsd())
+        .containsExactly(
+            tuple(new BigDecimal("2000.00"), new BigDecimal("500.00"), new BigDecimal("1500.00")),
+            tuple(new BigDecimal("1000.00"), new BigDecimal("500.00"), new BigDecimal("500.00")));
   }
 
   private void setLimitAt(String isoDate, String sum) {

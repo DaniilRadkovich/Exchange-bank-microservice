@@ -1,7 +1,7 @@
 package com.idftech.exchangeservice.infra.config;
 
+import com.idftech.exchangeservice.domain.BudgetPeriod;
 import java.time.Clock;
-import java.time.ZoneId;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -21,15 +21,13 @@ public class ClockConfig {
   /**
    * Системные часы в часовом поясе лимитов. В тестах бин заменяется на управляемый
    * {@code AdjustableClock}, чтобы переводить время между шагами сценария.
+   *
+   * <p>Пояс берётся из {@code BudgetPeriod.LIMIT_TIMEZONE}, а не из конфигурации: «сейчас» и
+   * границы месяца обязаны считаться в одном поясе, иначе 1-е число местного времени попадёт
+   * в чужой месяц.
    */
   @Bean
-  public Clock clock(LimitProperties limitProperties) {
-    return Clock.system(limitProperties.zoneId());
-  }
-
-  /** Часовой пояс приложения: он же используется для определения границ месяца. */
-  @Bean
-  public ZoneId applicationZoneId(LimitProperties limitProperties) {
-    return limitProperties.zoneId();
+  public Clock clock() {
+    return Clock.system(BudgetPeriod.LIMIT_TIMEZONE);
   }
 }

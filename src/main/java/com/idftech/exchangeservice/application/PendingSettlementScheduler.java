@@ -1,6 +1,5 @@
 package com.idftech.exchangeservice.application;
 
-import com.idftech.exchangeservice.infra.config.SettlementProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -30,11 +29,9 @@ public class PendingSettlementScheduler {
   private static final int BATCH_SIZE = 100;
 
   private final TransactionIntakeService intakeService;
-  private final SettlementProperties properties;
 
-  public PendingSettlementScheduler(TransactionIntakeService intakeService, SettlementProperties properties) {
+  public PendingSettlementScheduler(TransactionIntakeService intakeService) {
     this.intakeService = intakeService;
-    this.properties = properties;
   }
 
   @Scheduled(fixedDelayString = "${exchange.settlement.retry-delay:5s}")
@@ -43,10 +40,5 @@ public class PendingSettlementScheduler {
     if (processed > 0) {
       log.info("Processed {} pending transactions", processed);
     }
-  }
-
-  /** Сколько попыток дорасчёта допускается до перевода транзакции в статус FAILED. */
-  public int maxAttempts() {
-    return properties.maxAttempts();
   }
 }

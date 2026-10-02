@@ -3,7 +3,9 @@ package com.idftech.exchangeservice;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.idftech.exchangeservice.application.LimitCommandService;
+import com.idftech.exchangeservice.application.LimitQueryService;
 import com.idftech.exchangeservice.application.TransactionIntakeService;
+import com.idftech.exchangeservice.domain.ExceededTransaction;
 import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseTransaction;
 import com.idftech.exchangeservice.domain.TransactionStatus;
@@ -33,6 +35,9 @@ class LimitScenarioIntegrationTest extends AbstractIntegrationTest {
 
   @Autowired
   private LimitCommandService limitCommandService;
+
+  @Autowired
+  private LimitQueryService limitQueryService;
 
   @Test
   @DisplayName("Сценарий 1, строки 1–2: 500 USD не превышают лимит, 600 USD превышают")
@@ -263,6 +268,55 @@ class LimitScenarioIntegrationTest extends AbstractIntegrationTest {
     settle(send("2022-01-06", "900.00"));
 
     assertThat(storedFlagOf(januaryThird.id())).isFalse();
+  }
+
+  @Test
+  @DisplayName("Повышение лимита снимает флаг у операции с будущей датой, рассчитанной заранее")
+  void raisingLimitClearsFlagOfTransactionDatedInFuture() {
+    setLimitAt("2022-01-10", "1000.00");
+
+    // Операция датирована будущим числом: банк присылает такие до наступления даты. На момент
+    // расчёта её флаг верен, но позже клиент поднимет лимит — и флаг обязан измениться.
+    ExpenseTransaction januaryTwentieth = settle(send("2022-01-20", "1200.00"));
+    assertThat(storedFlagOf(januaryTwentieth.id())).isTrue();
+
+    setLimitAt("2022-01-15", "5000.00");
+
+    assertThat(storedFlagOf(januaryTwentieth.id())).isFalse();
+    assertThat(limitQueryService.findExceeded(ACCOUNT)).isEmpty();
+  }
+
+  @Test
+  @DisplayName("Повышение лимита не трогает флаги операций, случившихся до его установки")
+  void raisingLimitKeepsFlagsOfEarlierTransactions() {
+    setLimitAt("2022-01-10", "1000.00");
+    ExpenseTransaction januaryEleventh = settle(send("2022-01-11", "1200.00"));
+    assertThat(storedFlagOf(januaryEleventh.id())).isTrue();
+
+    // Новый лимит действует с 20.01, операция от 11.01 остаётся под старым порогом 1000.
+    setLimitAt("2022-01-20", "5000.00");
+
+    assertThat(storedFlagOf(januaryEleventh.id())).isTrue();
+    List<ExceededTransaction> exceeded = limitQueryService.findExceeded(ACCOUNT);
+    assertThat(exceeded).hasSize(1);
+    assertThat(exceeded.getFirst().limit()).isEqualByComparingTo("1000.00");
+  }
+
+  @Test
+  @DisplayName("Понижение лимита выставляет флаг у операций, которые раньше не превышали")
+  void loweringLimitSetsFlagOnLaterTransactions() {
+    setLimitAt("2022-01-01", "5000.00");
+    ExpenseTransaction januaryFifth = settle(send("2022-01-05", "1200.00"));
+    assertThat(storedFlagOf(januaryFifth.id())).isFalse();
+
+    setLimitAt("2022-01-10", "1000.00");
+
+    // Операция до 10.01 остаётся под старым порогом 5000: новый лимит не применяется задним числом.
+    assertThat(storedFlagOf(januaryFifth.id())).isFalse();
+
+    // А вот операция после понижения — под новым порогом 1000. Накопленный итог месяца (1300)
+    // считается с операции от 05.01, поэтому флаг уже превышения.
+    assertThat(flagOf(send("2022-01-11", "100.00"))).isTrue();
   }
 
   private static UUID nextId() {

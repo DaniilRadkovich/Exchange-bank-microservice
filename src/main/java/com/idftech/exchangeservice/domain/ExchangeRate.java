@@ -38,15 +38,6 @@ public record ExchangeRate(
     // а применимый курс выбирается в applicableRate().
   }
 
-  /** Курс в БД применим, если хотя бы одно из закрытий пригодно для перевода. */
-  public boolean isUsable() {
-    return (close != null && close.signum() > 0) || (previousClose != null && previousClose.signum() > 0);
-  }
-
-  public boolean hasPreviousClose() {
-    return previousClose != null;
-  }
-
   /** Курс, применимый к дате операции: close, а при его отсутствии — previous_close (ТЗ п.3). */
   public BigDecimal applicableRate() {
     if (close != null && close.signum() > 0) {

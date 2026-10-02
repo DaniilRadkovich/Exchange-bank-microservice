@@ -59,7 +59,7 @@ public class LimitCalculator {
         category,
         limitProperties.defaultSum().setScale(ExpenseLimit.USD_SCALE, RoundingMode.UNNECESSARY),
         Currency.getInstance(ExpenseLimit.USD_CURRENCY_CODE),
-        OffsetDateTime.ofInstant(period.defaultLimitInstant(), limitProperties.zoneId()));
+        OffsetDateTime.ofInstant(period.defaultLimitInstant(), BudgetPeriod.LIMIT_TIMEZONE));
   }
 
   /**
@@ -124,59 +124,6 @@ public class LimitCalculator {
     return spent.compareTo(effectiveLimit.limitSum()) > 0;
   }
 
-  /**
-   * Остаток месячного лимита: сумма последнего установленного лимита минус расходы периода с
-   * 1-го числа. Именно такая семантика даёт в ТЗ остаток 900 при лимите 2000 USD от 10.01 и
-   * расходах 500 + 600 в том же месяце.
-   */
-  public BigDecimal remaining(
-      List<ExpenseLimit> limitsInPeriod, List<ExpenseTransaction> allResolvedInPeriod) {
-    if (limitsInPeriod.isEmpty()) {
-      ExpenseTransaction reference = allResolvedInPeriod.isEmpty()
-          ? null
-          : allResolvedInPeriod.get(allResolvedInPeriod.size() - 1);
-      BudgetPeriod period = BudgetPeriod.of(
-          reference != null
-              ? reference.period().value()
-              : YearMonth.now(clock.withZone(limitProperties.zoneId())));
-      ExpenseLimit effectiveDefault = defaultLimit(
-          reference != null ? reference.accountFrom() : "0000000000",
-          reference != null ? reference.category() : ExpenseCategory.PRODUCT,
-          period);
-      return effectiveDefault.limitSum()
-          .subtract(spentOfPeriod(allResolvedInPeriod))
-          .setScale(USD_SCALE, RoundingMode.HALF_UP);
-    }
-    return lastLimitOf(limitsInPeriod).orElseThrow().limitSum()
-        .subtract(spentOfPeriod(allResolvedInPeriod))
-        .setScale(USD_SCALE, RoundingMode.HALF_UP);
-  }
-
-  /**
-   * Расходы периода целиком, независимо от дат установки лимитов.
-   *
-   * <p>Суммируются только транзакции с известной суммой в USD, то есть уже разрешённые: у
-   * транзакции в статусе {@code PENDING} сумма ещё не рассчитана и не должна занижать остаток.
-   */
-  public BigDecimal spentOfPeriod(List<ExpenseTransaction> allResolvedInPeriod) {
-    BigDecimal total = BigDecimal.ZERO;
-    for (ExpenseTransaction transaction : allResolvedInPeriod) {
-      if (transaction.amountUsd() != null) {
-        total = total.add(transaction.amountUsd());
-      }
-    }
-    return total.setScale(USD_SCALE, RoundingMode.HALF_UP);
-  }
-
-  /** Последний установленный лимит пары «счёт + категория» за период. */
-  public Optional<ExpenseLimit> lastLimitOf(List<ExpenseLimit> limitsInPeriod) {
-    if (limitsInPeriod.isEmpty()) {
-      return Optional.empty();
-    }
-    return limitsInPeriod.stream()
-        .max((left, right) -> left.limitDatetime().compareTo(right.limitDatetime()));
-  }
-
   /** Порядок транзакций в периоде: по времени, при равенстве — по идентификатору для стабильности. */
   public static List<ExpenseTransaction> ordered(List<ExpenseTransaction> transactions) {
     return transactions.stream()
@@ -188,7 +135,7 @@ public class LimitCalculator {
 
   /** Текущее время сервиса в часовом поясе лимитов. */
   public OffsetDateTime now() {
-    return OffsetDateTime.now(clock.withZone(limitProperties.zoneId()));
+    return OffsetDateTime.now(clock.withZone(BudgetPeriod.LIMIT_TIMEZONE));
   }
 
   private static boolean isNotAfter(ExpenseTransaction candidate, ExpenseTransaction target) {

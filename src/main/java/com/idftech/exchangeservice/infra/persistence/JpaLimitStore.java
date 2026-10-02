@@ -5,11 +5,9 @@ import com.idftech.exchangeservice.domain.BudgetPeriod;
 import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseLimit;
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.time.YearMonth;
 import java.time.ZoneId;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,22 +26,6 @@ public class JpaLimitStore implements LimitStore {
 
   public JpaLimitStore(ExpenseLimitJpaRepository repository) {
     this.repository = repository;
-  }
-
-  @Override
-  @Transactional(readOnly = true)
-  public Optional<ExpenseLimit> findEffectiveAt(String accountFrom, ExpenseCategory category, OffsetDateTime at) {
-    return repository.findEffectiveAt(accountFrom, category, at.toInstant()).stream()
-        .findFirst()
-        .map(this::toDomain);
-  }
-
-  @Override
-  @Transactional(readOnly = true)
-  public Optional<ExpenseLimit> findLatest(String accountFrom, ExpenseCategory category) {
-    return repository.findLatest(accountFrom, category).stream()
-        .findFirst()
-        .map(this::toDomain);
   }
 
   @Override

@@ -49,7 +49,7 @@ class LimitCalculatorTest {
   private final Clock clock = Clock.systemUTC();
 
   private final LimitCalculator calculator =
-      new LimitCalculator(new LimitProperties(null, null, null), clock);
+      new LimitCalculator(new LimitProperties(null, null), clock);
 
   @Nested
   @DisplayName("Сценарий 1 из таблицы ТЗ")
@@ -89,17 +89,6 @@ class LimitCalculatorTest {
     }
 
     @Test
-    @DisplayName("остаток при новом лимите считается от расходов всего месяца: 2000 − (500 + 600) = 900")
-    void remainingCountsWholePeriodNotSinceLimitDate() {
-      ExpenseLimit first = limit("2022-01-01", "1000.00");
-      ExpenseLimit second = limit("2022-01-10", "2000.00");
-      List<ExpenseTransaction> period =
-        List.of(usd("2022-01-02", "500.00"), usd("2022-01-03", "600.00"));
-
-      assertThat(calculator.remaining(List.of(first, second), period)).isEqualByComparingTo("900.00");
-    }
-
-    @Test
     @DisplayName("полный сценарий таблицы: 02.01 false, 03.01 true, 11.01 false, 12.01 false, 13.01 false, 13.01 true")
     void fullTableScenario() {
       List<ExpenseLimit> limits = List.of(limit("2022-01-01", "1000.00"), limit("2022-01-10", "2000.00"));
@@ -115,8 +104,6 @@ class LimitCalculatorTest {
 
       assertThat(flagsOf(transactions, limits))
           .containsExactly(false, true, false, false, false, true);
-
-      assertThat(calculator.remaining(limits, transactions)).isEqualByComparingTo("-100.00");
     }
 
     @Test
@@ -125,7 +112,6 @@ class LimitCalculatorTest {
       List<ExpenseLimit> limits = List.of(limit("2022-01-10", "2000.00"));
       ExpenseTransaction transaction = usd("2022-01-13", "2000.00");
 
-      assertThat(calculator.remaining(limits, List.of(transaction))).isEqualByComparingTo("0.00");
       assertThat(flagOf(transaction, limits, List.of(transaction))).isFalse();
     }
 
@@ -176,7 +162,6 @@ class LimitCalculatorTest {
             usd("2022-02-12", "100.00"));
 
       assertThat(flagsOf(transactions, limits)).containsExactly(false, false, true, true);
-      assertThat(calculator.remaining(limits, transactions)).isEqualByComparingTo("-400.00");
     }
   }
 
@@ -208,8 +193,6 @@ class LimitCalculatorTest {
 
       // В феврале своего лимита нет — действует лимит по умолчанию, и сумма начинается с нуля.
       assertThat(flagOf(february, List.of(), List.of(january, february))).isFalse();
-      assertThat(calculator.spentOfPeriod(List.of(january, february)))
-          .isEqualByComparingTo("1800.00");
     }
 
     @Test
@@ -261,8 +244,6 @@ class LimitCalculatorTest {
             null);
 
       assertThat(flagOf(product, List.of(productLimit), List.of(product, service))).isFalse();
-      assertThat(calculator.spentOfPeriod(List.of(product, service)))
-          .isEqualByComparingTo("2000.00");
     }
 
     @Test

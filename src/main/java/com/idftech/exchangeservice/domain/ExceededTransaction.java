@@ -43,25 +43,6 @@ public record ExceededTransaction(
     Objects.requireNonNull(limitCurrency, "limitCurrency");
   }
 
-  /** Собирает проекцию из транзакции и лимита, действовавшего на момент её совершения. */
-  public static ExceededTransaction of(
-      ExpenseTransaction transaction, ExpenseLimit limit, BigDecimal runningTotalUsd) {
-    return new ExceededTransaction(
-        transaction.id(),
-        transaction.accountFrom(),
-        transaction.accountTo(),
-        transaction.currency(),
-        transaction.amount(),
-        transaction.category(),
-        transaction.occurredAt(),
-        transaction.amountUsd(),
-        transaction.usdRate(),
-        limit.limitSum(),
-        limit.limitDatetime(),
-        limit.currency(),
-        runningTotalUsd);
-  }
-
   /** Насколько сумма превысила лимит, в USD. */
   public BigDecimal exceededBy() {
     return runningTotalUsd.subtract(limit);

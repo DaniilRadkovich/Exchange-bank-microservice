@@ -31,27 +31,31 @@ public class JpaRateCache implements RateCache {
 
   @Override
   @Transactional(readOnly = true)
-  public Optional<BigDecimal> findLatestRateNotAfter(String baseCurrency, LocalDate date) {
+  public Optional<ExchangeRate> findLatestRateNotAfter(String baseCurrency, LocalDate date) {
     return repository.findLatestNotAfter(baseCurrency, USD, date).stream()
         .findFirst()
-        .map(this::applicableRate);
+        .map(this::toDomain);
   }
 
   @Override
   public void save(ExchangeRate rate) {
-    // Повторный запрос к внешнему API за ту же пару и дату не нужен: запись уже есть.
-    if (repository.existsByBaseCurrencyAndQuoteCurrencyAndRateDate(
-        rate.base().getCurrencyCode(), rate.quote().getCurrencyCode(), rate.rateDate())) {
-      return;
-    }
-    repository.save(
-        new ExchangeRateEntity(
-            rate.id() != null ? rate.id() : UUID.randomUUID(),
-            rate.base().getCurrencyCode(),
-            rate.quote().getCurrencyCode(),
-            rate.rateDate(),
-            rate.close(),
-            rate.previousClose()));
+    repository.upsert(
+        rate.id() != null ? rate.id() : UUID.randomUUID(),
+        rate.base().getCurrencyCode(),
+        rate.quote().getCurrencyCode(),
+        rate.rateDate(),
+        rate.close(),
+        rate.previousClose());
+  }
+
+  private ExchangeRate toDomain(ExchangeRateEntity entity) {
+    return new ExchangeRate(
+        entity.getId(),
+        Currency.getInstance(entity.getBaseCurrency()),
+        Currency.getInstance(entity.getQuoteCurrency()),
+        entity.getRateDate(),
+        entity.getCloseRate(),
+        entity.getPreviousClose());
   }
 
   private BigDecimal applicableRate(ExchangeRateEntity entity) {

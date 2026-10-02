@@ -32,6 +32,11 @@ spring:
 
   jackson:
     default-property-inclusion: non_null
+    deserialization:
+      # Неизвестное поле в теле — ошибка формата, а не тихо проигнорированное значение. Иначе
+      # клиент отправлял бы limit_datetime в POST /limits, думая, что задаёт дату, а сервик её
+      # игнорировал, и получал 201 с другой датой.
+      fail-on-unknown-properties: true
 
   mvc:
     problemdetails:
@@ -39,9 +44,8 @@ spring:
 
 exchange:
   limit:
-    # Часовой пояс, в котором определяются границы календарного месяца лимита (ТЗ: указать в README).
-    timezone: UTC
     # Лимит по умолчанию, если клиент его не устанавливал (ТЗ п.2).
+    # Часового пояса здесь нет: границы месяца определены BudgetPeriod.LIMIT_TIMEZONE (UTC).
     default-sum: 1000.00
     default-currency: USD
   rates:
@@ -51,17 +55,26 @@ exchange:
     api-key: ${RATES_API_KEY:}
     connect-timeout: 2s
     read-timeout: 3s
+    # Насколько старым может быть резервный курс, если в БД нет закрытия на дату операции.
+    # Курс недельной давности — это уже другой рынок, и молча подставлять его в лимит опаснее,
+    # чем вернуть клиенту ошибку расчёта. После истечения срока транзакция уходит в FAILED
+    # и ждёт либо операции, либо ручного дорасчёта.
+    max-fallback-age: 7d
     # Число повторов при 5xx/таймауте; задержка растёт экспоненциально.
     max-retries: 3
     retry-initial-backoff: 200ms
     retry-max-backoff: 2s
   settlement:
-    # Максимальная глубина повторной обработки транзакций в статусе PENDING/FAILED.
+    # Сколько попыток дорасчёта до перевода транзакции из PENDING в FAILED.
     max-attempts: 5
     retry-delay: 5s
     # Фоновая дорасчётка транзакций. В тестах выключается (см. application-test.yaml),
     # чтобы результат проверки не зависел от фонового потока.
     processing-enabled: true
+    # Сколько транзакций дорасчитывается одновременно (ТЗ п.1*). Виртуальные потоки не ограничивают
+    # число задач, а каждая задача занимает соединение пула PostgreSQL, поэтому граница обязана быть
+    # не больше размера пула.
+    parallelism: 16
 
 springdoc:
   swagger-ui:
@@ -77,7 +90,8 @@ management:
         include: health,info,metrics,prometheus
   endpoint:
     health:
-      show-details: when-authorized
+      # Сервис не закрыт Spring Security, поэтому when-authorized не показывал бы детали никогда.
+      show-details: always
   observations:
     key-values:
       application: ${spring.application.name}

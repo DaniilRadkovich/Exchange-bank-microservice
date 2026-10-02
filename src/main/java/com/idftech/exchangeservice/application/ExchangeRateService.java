@@ -3,11 +3,14 @@ package com.idftech.exchangeservice.application;
 import com.idftech.exchangeservice.application.port.ExchangeRateProvider;
 import com.idftech.exchangeservice.application.port.RateCache;
 import com.idftech.exchangeservice.domain.ExchangeRate;
+import com.idftech.exchangeservice.infra.config.RateProviderProperties;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,16 +44,19 @@ public class ExchangeRateService {
   private final Counter cacheHits;
   private final Counter cacheMisses;
   private final Counter unresolvedRates;
+  private final Duration maxFallbackAge;
 
   public ExchangeRateService(
       RateCache rateCache,
       ExchangeRateProvider rateProvider,
-      MeterRegistry meterRegistry) {
+      MeterRegistry meterRegistry,
+      RateProviderProperties rateProviderProperties) {
     this.rateCache = rateCache;
     this.rateProvider = rateProvider;
     this.cacheHits = counter(meterRegistry, "hit");
     this.cacheMisses = counter(meterRegistry, "miss");
     this.unresolvedRates = counter(meterRegistry, "unresolved");
+    this.maxFallbackAge = rateProviderProperties.maxFallbackAge();
   }
 
   /**
@@ -77,14 +83,48 @@ public class ExchangeRateService {
       return fetched;
     }
 
-    Optional<BigDecimal> fallback = rateCache.findLatestRateNotAfter(currencyCode, date);
-    if (fallback.isPresent()) {
-      log.warn("No rate for {}/{} on {}; using latest known rate not after this date: {}", currencyCode, USD, date, fallback.get());
-    } else {
+    return fallbackRate(currencyCode, date);
+  }
+
+  /**
+   * Резервный курс из кэша, когда точной записи за дату операции нет.
+   *
+   * <p>Берётся только если он не старше {@code exchange.rates.max-fallback-age}. Раньше предела не
+   * было: операция, ушедшая в прошлое, получала курс последней доступной даты и молча считалась по
+   * нему. Число выглядит правдоподобно, но денежно неверно, и заметить это можно только вручную.
+   * Протухший резерв трактуется как отсутствие курса: транзакция дорассчитывается позже, когда
+   * данные появятся.
+   */
+  private Optional<BigDecimal> fallbackRate(String currencyCode, LocalDate date) {
+    Optional<ExchangeRate> fallback = rateCache.findLatestRateNotAfter(currencyCode, date);
+    if (fallback.isEmpty()) {
       unresolvedRates.increment();
       log.warn("No rate available for {}/{} on {}", currencyCode, USD, date);
+      return Optional.empty();
     }
-    return fallback;
+
+    ExchangeRate rate = fallback.get();
+    long ageDays = ChronoUnit.DAYS.between(rate.rateDate(), date);
+    if (ageDays > maxFallbackAge.toDays()) {
+      unresolvedRates.increment();
+      log.error(
+          "Refusing to use stale rate for {}/{}: last known {} is {} day(s) old, limit is {} day(s)",
+          currencyCode,
+          USD,
+          rate.rateDate(),
+          ageDays,
+          maxFallbackAge.toDays());
+      return Optional.empty();
+    }
+
+    log.warn(
+        "No rate for {}/{} on {}; using latest known rate from {} ({} day(s) old)",
+        currencyCode,
+        USD,
+        date,
+        rate.rateDate(),
+        ageDays);
+    return Optional.of(usableRate(rate));
   }
 
   private Optional<BigDecimal> fetchAndCache(String currencyCode, LocalDate date) {

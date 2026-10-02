@@ -5,16 +5,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.idftech.exchangeservice.application.ExchangeRateService;
 import com.idftech.exchangeservice.application.LimitCommandService;
 import com.idftech.exchangeservice.application.TransactionIntakeService;
+import com.idftech.exchangeservice.application.port.RateCache;
+import com.idftech.exchangeservice.domain.ExchangeRate;
 import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseTransaction;
 import com.idftech.exchangeservice.domain.TransactionStatus;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Currency;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 
 /**
  * Работа с биржевыми курсами: собственный кэш, перевод в USD и отказоустойчивость (ТЗ п.3).
@@ -36,6 +46,16 @@ class ExchangeRateIntegrationTest extends AbstractIntegrationTest {
 
   @Autowired
   private ExchangeRateService exchangeRateService;
+
+  @Autowired
+  private RateCache rateCache;
+
+  /**
+   * Брать число из конфигурации, а не писать константой: тест обязан ломаться, если
+   * {@code exchange.settlement.max-attempts} перестанет влиять на переход в {@code FAILED}.
+   */
+  @Value("${exchange.settlement.max-attempts}")
+  private int maxAttempts;
 
   @Test
   @DisplayName("Транзакция в USD считается с курсом 1 без обращения к внешнему API")
@@ -185,6 +205,147 @@ class ExchangeRateIntegrationTest extends AbstractIntegrationTest {
             ExpenseCategory.PRODUCT, utc("2022-01-10"));
 
     assertThat(intakeService.settle(pending.id()).status()).isEqualTo(TransactionStatus.PENDING);
+  }
+
+  @Test
+  @DisplayName("Исчерпание max-attempts переводит транзакцию в FAILED и убирает её из дорасчёта")
+  void transactionIsMarkedFailedAfterMaxAttempts() {
+    stubRateProviderFailure();
+    ExpenseTransaction pending =
+        intakeService.accept(
+            nextId(), ACCOUNT, "0000009999", "KZT", new BigDecimal("10000.00"),
+            ExpenseCategory.PRODUCT, utc("2022-01-10"));
+
+    // Все попытки, кроме последней, оставляют транзакцию в PENDING: до лимита это штатное ожидание.
+    for (int attempt = 1; attempt < maxAttempts; attempt++) {
+      intakeService.settle(pending.id());
+      assertThat(statusInDatabase(pending.id())).isEqualTo(TransactionStatus.PENDING.name());
+    }
+    intakeService.settle(pending.id());
+
+    assertThat(statusInDatabase(pending.id())).isEqualTo(TransactionStatus.FAILED.name());
+    assertThat(attemptsInDatabase(pending.id())).isEqualTo(maxAttempts);
+    // Провайдер по-прежнему недоступен, но планировщик больше её не берёт: иначе бесконечный
+    // ретрай каждые retry-delay секунд никогда бы не остановился.
+    assertThat(intakeService.findPending(100)).isEmpty();
+  }
+
+  @Test
+  @DisplayName("FAILED не означает потерю данных: транзакция досчитывается вручную")
+  void failedTransactionIsSettledManually() {
+    stubRateProviderFailure();
+    ExpenseTransaction pending =
+        intakeService.accept(
+            nextId(), ACCOUNT, "0000009999", "KZT", new BigDecimal("10000.00"),
+            ExpenseCategory.PRODUCT, utc("2022-01-10"));
+    for (int attempt = 0; attempt < maxAttempts; attempt++) {
+      intakeService.settle(pending.id());
+    }
+    assertThat(statusInDatabase(pending.id())).isEqualTo(TransactionStatus.FAILED.name());
+
+    rateApi().resetAll();
+    stubRate("KZT", new BigDecimal("0.0025"));
+
+    ExpenseTransaction settled = intakeService.settle(pending.id());
+
+    assertThat(settled.status()).isEqualTo(TransactionStatus.RATE_RESOLVED);
+    assertThat(settled.amountUsd()).isEqualByComparingTo("25.00");
+  }
+
+  private String statusInDatabase(UUID id) {
+    return jdbcTemplate.queryForObject(
+        "SELECT status FROM expense_transaction WHERE id = ?", String.class, id);
+  }
+
+  private int attemptsInDatabase(UUID id) {
+    return jdbcTemplate.queryForObject(
+        "SELECT settlement_attempts FROM expense_transaction WHERE id = ?", Integer.class, id);
+  }
+
+  @Test
+  @DisplayName("Резервный курс не старше max-fallback-age подставляется и попадает в расчёт")
+  void recentFallbackRateIsUsed() {
+    // За выходные точной записи за дату операции нет, но свежий курс есть — это нормальная
+    // ситуация, а не ошибка.
+    rateCache.save(rate("2022-01-05", null, new BigDecimal("0.0025")));
+    stubRateEmpty();
+
+    ExpenseTransaction settled =
+        settle(intakeService.accept(
+            nextId(), ACCOUNT, "0000009999", "KZT", new BigDecimal("10000.00"),
+            ExpenseCategory.PRODUCT, utc("2022-01-10")));
+
+    assertThat(settled.status()).isEqualTo(TransactionStatus.RATE_RESOLVED);
+    assertThat(settled.amountUsd()).isEqualByComparingTo("25.00");
+  }
+
+  @Test
+  @DisplayName("Резервный курс старше max-fallback-age не подставляется: транзакция ждёт дорасчёта")
+  void staleFallbackRateIsNotUsed() {
+    // Полгода старше недельного предела. Подставить такой курс молча нельзя: сумма в USD получилась
+    // бы правдоподобной и денежно неверной, и заметить это можно только вручную.
+    rateCache.save(rate("2021-07-01", null, new BigDecimal("0.0025")));
+    stubRateEmpty();
+
+    ExpenseTransaction pending =
+        intakeService.accept(
+            nextId(), ACCOUNT, "0000009999", "KZT", new BigDecimal("10000.00"),
+            ExpenseCategory.PRODUCT, utc("2022-01-10"));
+
+    assertThat(settle(pending).status()).isEqualTo(TransactionStatus.PENDING);
+  }
+
+  @Test
+  @DisplayName("Запись кэша, сохранённая без close, позже дополняется настоящим close")
+  void incompleteCacheEntryIsCompletedByLaterUpsert() {
+    rateCache.save(rate("2022-01-10", null, new BigDecimal("0.0025")));
+    rateCache.save(rate("2022-01-10", new BigDecimal("0.0030"), new BigDecimal("0.0025")));
+
+    // Прежняя реализация просто возвращалась, если запись уже есть, и close оставался пустым
+    // навсегда: кэш залипал на previous_close даже после появления настоящей цены закрытия.
+    assertThat(rateCache.findRate("KZT", LocalDate.parse("2022-01-10")))
+        .contains(new BigDecimal("0.0030"));
+  }
+
+  @Test
+  @DisplayName("Параллельная запись одного и того же курса не приводит к нарушению уникального ключа")
+  void concurrentCacheWritesOfSamePairSucceed() throws Exception {
+    int threads = 8;
+    var pool = Executors.newFixedThreadPool(threads);
+    try {
+      var start = new CountDownLatch(1);
+      List<Future<?>> writes = new ArrayList<>();
+      for (int i = 0; i < threads; i++) {
+        writes.add(
+            pool.submit(
+                () -> {
+                  start.await();
+                  // Каждый поток приносит свой id: при exists+save гонка выдала бы нарушение
+                  // uc_exchange_rate_pair_date сразу двум потокам.
+                  rateCache.save(rate("2022-01-10", new BigDecimal("0.0025"), new BigDecimal("0.0024")));
+                  return null;
+                }));
+      }
+      start.countDown();
+      for (Future<?> write : writes) {
+        write.get(30, TimeUnit.SECONDS);
+      }
+    } finally {
+      pool.shutdownNow();
+    }
+
+    assertThat(jdbcTemplate.queryForObject(
+        "SELECT COUNT(*) FROM exchange_rate WHERE base_currency = 'KZT'", Integer.class)).isEqualTo(1);
+  }
+
+  private ExchangeRate rate(String isoDate, BigDecimal close, BigDecimal previousClose) {
+    return new ExchangeRate(
+        UUID.randomUUID(),
+        Currency.getInstance("KZT"),
+        Currency.getInstance("USD"),
+        LocalDate.parse(isoDate),
+        close,
+        previousClose);
   }
 
   private ExpenseTransaction settle(ExpenseTransaction pending) {

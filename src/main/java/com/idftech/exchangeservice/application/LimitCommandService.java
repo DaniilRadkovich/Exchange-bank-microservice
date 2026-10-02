@@ -1,9 +1,9 @@
 package com.idftech.exchangeservice.application;
 
 import com.idftech.exchangeservice.application.port.LimitStore;
+import com.idftech.exchangeservice.domain.BudgetPeriod;
 import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseLimit;
-import com.idftech.exchangeservice.infra.config.LimitProperties;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.OffsetDateTime;
@@ -28,12 +28,13 @@ public class LimitCommandService {
   private static final Logger log = LoggerFactory.getLogger(LimitCommandService.class);
 
   private final LimitStore limitStore;
-  private final LimitProperties limitProperties;
+  private final SettlementApplier settlementApplier;
   private final Clock clock;
 
-  public LimitCommandService(LimitStore limitStore, LimitProperties limitProperties, Clock clock) {
+  public LimitCommandService(
+      LimitStore limitStore, SettlementApplier settlementApplier, Clock clock) {
     this.limitStore = limitStore;
-    this.limitProperties = limitProperties;
+    this.settlementApplier = settlementApplier;
     this.clock = clock;
   }
 
@@ -51,10 +52,15 @@ public class LimitCommandService {
    */
   @Transactional
   public ExpenseLimit createLimit(String accountFrom, ExpenseCategory category, BigDecimal limitSum) {
-    OffsetDateTime now = OffsetDateTime.now(clock.withZone(limitProperties.zoneId()));
+    OffsetDateTime now = OffsetDateTime.now(clock.withZone(BudgetPeriod.LIMIT_TIMEZONE));
 
     ExpenseLimit limit = ExpenseLimit.create(UUID.randomUUID(), accountFrom, category, limitSum, now);
     ExpenseLimit saved = limitStore.save(limit);
+
+    // Флаги операций, уже рассчитанных под прежним порогом, с новым лимитом не согласуются: те же
+    // суммы, другой порог. Пересчёт идёт в этой же транзакции и под той же блокировкой периода, что
+    // и дорасчёт, поэтому клиент не увидит промежуточного состояния «новый лимит — старые флаги».
+    settlementApplier.recalculatePeriod(accountFrom, category, BudgetPeriod.of(now));
 
     log.info(
         "Limit {} USD set for account {} category {} at {}", limitSum, accountFrom, category.code(), now);

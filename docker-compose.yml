@@ -1,6 +1,8 @@
 # Запуск сервиса вместе с БД одной командой:
 #   docker compose up --build
 # Swagger UI: http://localhost:8080/swagger-ui.html
+# Логи сервиса в этом compose — JSON (профиль prod, см. application-prod.yaml и logback-prod.xml).
+# Локальная разработка с отладочным выводом и SQL — ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
 #
 # Ключ внешнего API курсов и пароль пользователя БД только для чтения задаются окружением:
 #   RATES_API_KEY=... EXCHANGE_READONLY_PASSWORD=... docker compose up --build
@@ -17,7 +19,7 @@ services:
       # переменной окружения и в репозиторий не попадает.
       EXCHANGE_READONLY_PASSWORD: ${EXCHANGE_READONLY_PASSWORD:-readonly-local}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - exchange-pgdata:/var/lib/postgresql/data
       # Скрипты инициализации выполняются один раз, при первом запуске на пустом томе.
@@ -36,6 +38,9 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      # Профиль prod включает JSON-логи (logback-prod.xml) и убирает show-sql. Без него compose
+      # поднимал бы контейнер, в котором logback-prod.xml лежит мёртвым файлом.
+      SPRING_PROFILES_ACTIVE: prod
       DB_URL: jdbc:postgresql://postgres:5432/exchange
       DB_USERNAME: exchange
       DB_PASSWORD: exchange

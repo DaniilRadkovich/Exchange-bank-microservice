@@ -21,10 +21,15 @@ import java.util.UUID;
 public interface TransactionStore {
 
   /**
-   * Сохраняет транзакцию и при необходимости создаёт строку-замок для пары «счёт + категория +
-   * месяц». Возвращает сохранённую транзакцию.
+   * Создаёт запись транзакции, если её ещё нет, и создаёт строку-замок для пары «счёт + категория +
+   * месяц». Возвращает состояние строки из базы.
+   *
+   * <p>Приём идемпотентен: при повторной доставке того же {@code id} возвращается уже существующая
+   * транзакция, а она не затирается. Проверять существование до вставки на стороне Java нельзя —
+   * параллельные ретраи обошли бы такую проверку, и один из них получил бы нарушение первичного
+   * ключа вместо успешного приёма. Реализация обязана быть атомарной на уровне БД.
    */
-  ExpenseTransaction save(ExpenseTransaction transaction);
+  ExpenseTransaction saveIfAbsent(ExpenseTransaction transaction);
 
   Optional<ExpenseTransaction> findById(UUID id);
 
@@ -45,7 +50,13 @@ public interface TransactionStore {
   List<ExpenseTransaction> findResolvedInPeriod(
       String accountFrom, ExpenseCategory category, BudgetPeriod period);
 
-  /** Фиксирует результат расчёта: применённый курс, сумму в USD и флаг превышения. */
+  /**
+   * Фиксирует результат расчёта: применённый курс, сумму в USD и флаг превышения.
+   *
+   * <p>Принимает только транзакцию в статусе {@code RATE_RESOLVED}. Неудачные попытки — это отдельный
+   * случай, {@link #registerUnresolvedAttempt(UUID, int)}: смешивать два разных исхода в одном методе
+   * значило бы получить две точки, где считается счётчик попыток.
+   */
   void updateSettlement(ExpenseTransaction transaction);
 
   /** Транзакции, ожидающие дорасчёта, не превысившие лимит попыток; используется фоновой обработкой. */
@@ -79,6 +90,13 @@ public interface TransactionStore {
       BigDecimal spentUsd,
       BigDecimal remainingUsd) {}
 
-  /** Фиксирует число попыток дорасчёта, чтобы не ретраить бесконечно. */
-  void incrementSettlementAttempts(UUID id);
+  /**
+   * Фиксирует неудачную попытку дорасчёта.
+   *
+   * <p>Счётчик попыток растёт всегда, а начиная с попытки, номер которой достиг {@code maxAttempts},
+   * транзакция переводится в {@code FAILED}. Дальше она больше не выбирается в
+   * {@link #findPending}, но остаётся в базе и досчитывается вручную: данные приёма терять нельзя,
+   * а бесконечный ретрай недоступного провайдера маскирует реальную проблему.
+   */
+  void registerUnresolvedAttempt(UUID id, int maxAttempts);
 }

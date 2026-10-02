@@ -104,8 +104,23 @@ public class ExpenseTransactionEntity {
     this.status = TransactionStatus.RATE_RESOLVED;
   }
 
-  /** Увеличивает счётчик попыток дорасчёта. */
-  public void registerSettlementAttempt() {
+  /**
+   * Фиксирует неудачную попытку дорасчёта.
+   *
+   * <p>Счётчик растёт всегда, а в {@code FAILED} транзакция переводится начиная с попытки, номер
+   * которой достиг лимита. Иначе неограниченный ретрай внешнего API молча крутил бы транзакцию
+   * вечно: в {@code PENDING} она выглядит как «курс вот-вот придёт», и непонятно, ждать её или
+   * поднимать тревогу.
+   *
+   * <p>Сумма в USD и флаг превышения остаются {@code null} — CHECK-ограничение
+   * {@code ck_expense_tx_resolved_consistent} требует их отсутствия для любого статуса, кроме
+   * {@code RATE_RESOLVED}. Попытка вручную не теряется: {@code apply} досчитывает транзакцию и в
+   * этом статусе.
+   */
+  public void registerSettlementAttempt(int maxAttempts) {
     this.settlementAttempts++;
+    if (this.settlementAttempts >= maxAttempts) {
+      this.status = TransactionStatus.FAILED;
+    }
   }
 }

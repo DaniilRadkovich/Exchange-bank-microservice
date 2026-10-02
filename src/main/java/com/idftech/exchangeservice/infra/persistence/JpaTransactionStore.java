@@ -49,6 +49,16 @@ public class JpaTransactionStore implements TransactionStore {
       ON CONFLICT (account_from, expense_category, budget_period) DO NOTHING
       """;
 
+  private static final String INSERT_IF_ABSENT = """
+      INSERT INTO expense_transaction (
+          id, account_from, account_to, currency_code, amount, expense_category,
+          occurred_at, usd_rate, amount_usd, status, limit_exceeded, settlement_attempts)
+      VALUES (
+          :id, :accountFrom, :accountTo, :currencyCode, :amount, :expenseCategory,
+          :occurredAt, :usdRate, :amountUsd, :status, :limitExceeded, 0)
+      ON CONFLICT (id) DO NOTHING
+      """;
+
   private final EntityManager entityManager;
   private final ExpenseTransactionJpaRepository repository;
   private final LimitAnalyticsQueryRepository analyticsRepository;
@@ -65,22 +75,37 @@ public class JpaTransactionStore implements TransactionStore {
     this.limitProperties = limitProperties;
   }
 
+  /**
+   * Вставка «если ещё нет» одной нативной командой {@code ON CONFLICT DO NOTHING}.
+   *
+   * <p>Приём транзакции идемпотентен по {@code id}: повторная доставка того же {@code transaction_id}
+   * не должна менять уже рассчитанную строку. Раньше здесь был {@code repository.save()}, который
+   * делает merge и затирал у существующей записи курс, сумму в USD и флаг {@code limit_exceeded} —
+   * до пересчёта клиент видел превышение как непревышение.
+   *
+   * <p>Проверка существования в Java здесь не годится: два параллельных повтора одного
+   * {@code transaction_id} (типичный сетевой ретрай с нескольких инстансов) оба увидели бы
+   * «нет такой строки» и один из них получил бы нарушение первичного ключа вместо успешного
+   * {@code 202}. Решение отдаётся базе, которая и делает вставку атомарной.
+   */
   @Override
-  public ExpenseTransaction save(ExpenseTransaction transaction) {
+  public ExpenseTransaction saveIfAbsent(ExpenseTransaction transaction) {
     ensurePeriodLock(transaction.accountFrom(), transaction.category(), transaction.period().value().toString());
-    ExpenseTransactionEntity entity = new ExpenseTransactionEntity(
-        transaction.id(),
-        transaction.accountFrom(),
-        transaction.accountTo(),
-        transaction.currency().getCurrencyCode(),
-        transaction.amount(),
-        transaction.category(),
-        transaction.occurredAt().toInstant(),
-        transaction.usdRate(),
-        transaction.amountUsd(),
-        transaction.status(),
-        transaction.limitExceeded());
-    return toDomain(repository.save(entity));
+    entityManager
+        .createNativeQuery(INSERT_IF_ABSENT)
+        .setParameter("id", transaction.id())
+        .setParameter("accountFrom", transaction.accountFrom())
+        .setParameter("accountTo", transaction.accountTo())
+        .setParameter("currencyCode", transaction.currency().getCurrencyCode())
+        .setParameter("amount", transaction.amount())
+        .setParameter("expenseCategory", transaction.category().code())
+        .setParameter("occurredAt", transaction.occurredAt().withOffsetSameInstant(ZoneOffset.UTC))
+        .setParameter("usdRate", transaction.usdRate())
+        .setParameter("amountUsd", transaction.amountUsd())
+        .setParameter("status", transaction.status().name())
+        .setParameter("limitExceeded", transaction.limitExceeded())
+        .executeUpdate();
+    return repository.findById(transaction.id()).map(this::toDomain).orElseThrow();
   }
 
   @Override
@@ -106,15 +131,28 @@ public class JpaTransactionStore implements TransactionStore {
         .toList();
   }
 
+  /**
+   * Пишет только результат расчёта: курс, сумму в USD и флаг превышения.
+   *
+   * <p>Неудачные попытки сюда не попадают — у них отдельный путь
+   * {@link #registerUnresolvedAttempt(UUID, int)}. Раньше здесь был {@code else} со счётчиком
+   * попыток, и вызов с неразрешённой транзакцией тихо увеличивал счётчик второй раз, не доходя до
+   * {@code FAILED}.
+   */
   @Override
   public void updateSettlement(ExpenseTransaction transaction) {
-    repository.findById(transaction.id()).ifPresent(entity -> {
-      if (transaction.status() == TransactionStatus.RATE_RESOLVED) {
-        entity.applySettlement(transaction.usdRate(), transaction.amountUsd(), Boolean.TRUE.equals(transaction.limitExceeded()));
-      } else {
-        entity.registerSettlementAttempt();
-      }
-    });
+    if (transaction.status() != TransactionStatus.RATE_RESOLVED) {
+      throw new IllegalArgumentException(
+          "updateSettlement accepts only RATE_RESOLVED, got " + transaction.status());
+    }
+    repository
+        .findById(transaction.id())
+        .ifPresent(
+            entity ->
+                entity.applySettlement(
+                    transaction.usdRate(),
+                    transaction.amountUsd(),
+                    Boolean.TRUE.equals(transaction.limitExceeded())));
   }
 
   @Override
@@ -126,8 +164,8 @@ public class JpaTransactionStore implements TransactionStore {
   }
 
   @Override
-  public void incrementSettlementAttempts(UUID id) {
-    repository.findById(id).ifPresent(ExpenseTransactionEntity::registerSettlementAttempt);
+  public void registerUnresolvedAttempt(UUID id, int maxAttempts) {
+    repository.findById(id).ifPresent(entity -> entity.registerSettlementAttempt(maxAttempts));
   }
 
   /**
@@ -180,7 +218,7 @@ public class JpaTransactionStore implements TransactionStore {
             accountFrom,
             limitProperties.defaultSum(),
             limitProperties.defaultCurrency(),
-            limitProperties.zoneId().getId())
+            BudgetPeriod.LIMIT_TIMEZONE.getId())
         .stream()
         .map(this::toExceeded)
         .toList();

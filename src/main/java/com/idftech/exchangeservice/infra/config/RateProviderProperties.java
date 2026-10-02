@@ -11,6 +11,9 @@ import org.springframework.validation.annotation.Validated;
  * внешнего API, поэтому таймауты короткие, а неудачные попытки ограничены по числу и растут по
  * времени. Итоговая стратегия описывается в README.
  *
+ * <p>Помимо HTTP-клиента здесь настройка политики кэша: {@code maxFallbackAge} ограничивает, насколько
+ * старым может быть курс, взятый из базы как резерв.
+ *
  * @param provider идентификатор провайдера, используется для выбора адаптера
  * @param baseUrl базовый URL внешнего API
  * @param apiKey ключ доступа; передаётся переменной окружения, в репозиторий не коммитится
@@ -19,6 +22,9 @@ import org.springframework.validation.annotation.Validated;
  * @param maxRetries число повторных попыток при 5xx и таймаутах
  * @param retryInitialBackoff начальная задержка между попытками
  * @param retryMaxBackoff максимальная задержка между попытками
+ * @param maxFallbackAge насколько старым может быть резервный курс из кэша. Без предела операция,
+ *     датированная годом назад, получила бы курс последней доступной даты и молча посчиталась по
+ *     нему: цифра выглядит правдоподобно, но денежно неверна
  */
 @Validated
 @ConfigurationProperties(prefix = "exchange.rates")
@@ -30,7 +36,8 @@ public record RateProviderProperties(
     Duration readTimeout,
     int maxRetries,
     Duration retryInitialBackoff,
-    Duration retryMaxBackoff) {
+    Duration retryMaxBackoff,
+    Duration maxFallbackAge) {
 
   public RateProviderProperties {
     if (connectTimeout == null) {
@@ -47,6 +54,11 @@ public record RateProviderProperties(
     }
     if (retryMaxBackoff == null) {
       retryMaxBackoff = Duration.ofSeconds(2);
+    }
+    if (maxFallbackAge == null || maxFallbackAge.isNegative() || maxFallbackAge.isZero()) {
+      // Неделя покрывает выходные и длинные праздники, но не даёт подставить курс полугодовой
+      // давности операции, ушедшей в прошлое.
+      maxFallbackAge = Duration.ofDays(7);
     }
   }
 }

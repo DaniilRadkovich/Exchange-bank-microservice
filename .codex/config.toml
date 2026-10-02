@@ -1,0 +1,18 @@
+# Конфигурация MCP для Codex. Тот же сервер, что и в .mcp.json: протокол MCP единый,
+# различается только файл, в котором он описан.
+# Секреты не коммитятся: значения берутся из переменных окружения.
+
+[mcp_servers.postgres]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-postgres"]
+
+[mcp_servers.postgres.env]
+PGHOST = "${PGHOST}"
+PGPORT = "${PGPORT}"
+PGDATABASE = "${PGDATABASE}"
+PGUSER = "${PGUSER}"
+PGPASSWORD = "${PGPASSWORD}"
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]

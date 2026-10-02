@@ -5,6 +5,7 @@ import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -65,7 +66,10 @@ abstract class AbstractIntegrationTest {
           .withPassword("exchange");
 
   private static final WireMockServer RATE_API =
-      new WireMockServer(WireMockConfiguration.options().dynamicPort());
+      new WireMockServer(
+          WireMockConfiguration.options()
+              .dynamicPort()
+              .extensions(ConcurrentRequestCounterHolder.TRANSFORMER));
 
   static {
     POSTGRES.start();
@@ -106,6 +110,10 @@ abstract class AbstractIntegrationTest {
     // протекали бы в следующий.
     jdbcTemplate.execute("TRUNCATE TABLE expense_transaction, expense_limit, exchange_rate, spend_period_lock RESTART IDENTITY CASCADE");
     RATE_API.resetAll();
+    ConcurrentRequestCounterHolder.COUNTER.reset();
+    // Удержание сбрасывается вместе с остальной заглушкой: медленный ответ из одного теста
+    // иначе протёк бы в следующий и исказил его измерения.
+    ConcurrentRequestCounterHolder.TRANSFORMER.holdEachRequestFor(Duration.ZERO);
     SERVICE_TIME.set(OffsetDateTime.parse("2022-01-01T10:00:00Z"));
     testClock.set(SERVICE_TIME.get());
   }
@@ -167,6 +175,53 @@ abstract class AbstractIntegrationTest {
                     """
                         .formatted(baseCurrency, serviceDate().minusDays(1),
                             previousClose.toPlainString(), previousClose.toPlainString()))));
+  }
+
+  /**
+   * Заглушка ответа провайдера, которая держит каждый запрос заданное время и считает одновременные
+   * обращения.
+   *
+   * <p>Нужна, чтобы доказать, что запросы действительно идут параллельно: без паузы на стороне
+   * WireMock пачка расходуется быстрее любого измерения, и последовательный код проходит такую же
+   * проверку, как параллельный. Пауза имитирует реальный сетевой вызов — именно его и нужно перекрыть
+   * распараллеливанием.
+   *
+   * @param holdTime сколько провайдер «думает» перед ответом
+   */
+  protected void stubSlowRate(Duration holdTime) {
+    ConcurrentRequestCounterHolder.TRANSFORMER.holdEachRequestFor(holdTime);
+    RATE_API.stubFor(
+        WireMock.get(WireMock.urlPathEqualTo("/time_series"))
+            .willReturn(
+                WireMock.aResponse()
+                    .withHeader("Content-Type", "application/json")
+                    .withBody(slowRateBody())
+                    .withTransformers(ConcurrencyCountingTransformer.NAME)));
+  }
+
+  private String slowRateBody() {
+    return """
+        {
+          "meta": {"symbol": "SLOW/USD", "interval": "1day", "currency": "USD"},
+          "values": [
+            {"datetime": "%s", "close": "%s", "previous_close": "%s"}
+          ],
+          "status": "ok"
+        }
+        """
+        .formatted(
+            serviceDate(),
+            DEFAULT_CLOSE_RATE.toPlainString(),
+            DEFAULT_CLOSE_RATE.toPlainString());
+  }
+
+  /**
+   * Пик одновременных обращений к внешнему API, зафиксированный с момента последнего сброса.
+   *
+   * <p>Нулевое значение означает, что заглушка с задержкой не выставлялась.
+   */
+  protected int peakConcurrentRateRequests() {
+    return ConcurrentRequestCounterHolder.COUNTER.peak();
   }
 
   /** Заглушка недоступности внешнего API: сервер отвечает 500 на все запросы. */
@@ -248,4 +303,21 @@ abstract class AbstractIntegrationTest {
       return new TestClock();
     }
   }
+}
+
+/**
+ * Доступ к счётчику и преобразователю из статического блока, где создаётся WireMock.
+ *
+ * <p>Сервер поднимается один раз на весь прогон в статической инициализации, а счётчик нужен
+ * экземпляру теста. Статическое поле — единственный способ связать их без передачи сервера в
+ * конструктор каждого теста.
+ */
+final class ConcurrentRequestCounterHolder {
+
+  static final ConcurrentRequestCounter COUNTER = new ConcurrentRequestCounter();
+
+  static final ConcurrencyCountingTransformer TRANSFORMER =
+      new ConcurrencyCountingTransformer(COUNTER);
+
+  private ConcurrentRequestCounterHolder() {}
 }

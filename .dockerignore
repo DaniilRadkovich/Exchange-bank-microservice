@@ -1,0 +1,32 @@
+# Контекст сборки нужен целиком: Dockerfile копирует pom.xml и src.
+# Всё остальное в образ попадать не должно — иначе сборка становится медленнее, а в слои
+# зависимостей и кэша попадают файлы, меняющиеся без отношения к коду.
+
+# Сборка Maven внутри контейнера
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# Локальное окружение и редактор
+.idea/
+*.iml
+.vscode/
+.claude/
+.codex/
+.cursor/
+.agents/
+
+# Инструменты агента: в рантайм-образе им не место
+.mcp.json
+
+# CI и документация — для сборки jar не нужны
+.github/
+.git/
+.gitattributes
+.gitignore
+
+# Скрипты инициализации БД нужны compose, но не сборке образа
+ops/
+docker-compose.yml
+README.md
+AGENTS.md
+HELP.md

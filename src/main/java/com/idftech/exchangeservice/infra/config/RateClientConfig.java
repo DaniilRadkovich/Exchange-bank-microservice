@@ -5,6 +5,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import com.idftech.exchangeservice.infra.rate.TwelveDataRateProvider;
 import java.net.http.HttpClient;
 import java.time.Duration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -42,11 +43,23 @@ public class RateClientConfig {
   /**
    * Провайдер курсов по умолчанию.
    *
-   * <p>Регистрируется как бин типа {@link com.idftech.exchangeservice.application.port.ExchangeRateProvider}:
-   * чтобы добавить второго провайдера, достаточно объявить ещё один бин и {@code @Primary}, либо
-   * развести их по условию {@code @ConditionalOnProperty} — потребители ничего не меняют.
+   * <p>Условие по {@code exchange.rates.provider} — не украшение: без него свойство в конфигурации
+   * ничего не значило бы, и подмена провайдера молча игнорировалась. С ним добавление второго
+   * провайдера сводится к ещё одному бину с {@code havingValue} другого значения — потребители
+   * ({@code ExchangeRateService}, {@code ParallelRateResolver}) ничего не меняют.
+   *
+   * <p>{@code matchIfMissing} оставляет работоспособной конфигурацию, где свойство не задано вовсе.
+   * Если же в {@code provider} попадёт незнакомое значение, бинов {@code ExchangeRateProvider} не
+   * останется и контекст не поднимется — с сообщением о неточной конфигурации, а не с
+   * {@code NoUniqueBeanDefinitionException} или, что хуже, с молчаливым использованием провайдера,
+   * которого клиент не выбирал.
    */
   @Bean
+  @ConditionalOnProperty(
+      prefix = "exchange.rates",
+      name = "provider",
+      havingValue = "twelvedata",
+      matchIfMissing = true)
   public TwelveDataRateProvider twelveDataRateProvider(
       RestClient rateProviderRestClient,
       RateProviderProperties properties,

@@ -9,5 +9,7 @@ logging:
   level:
     root: WARN
     com.idftech.exchangeservice: INFO
-  logback:
-    config: classpath:logback-prod.xml
+  # Именно logging.config: в Spring Boot 4 свойства logging.logback.config больше нет, и
+  # неизвестный ключ в YAML игнорируется молча — файл логирования остался бы мёртвым, а
+  # контейнер писал бы обычный текст вместо JSON.
+  config: classpath:logback-prod.xml

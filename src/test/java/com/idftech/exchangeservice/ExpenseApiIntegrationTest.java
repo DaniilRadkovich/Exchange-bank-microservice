@@ -13,8 +13,14 @@ import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseTransaction;
 import io.restassured.RestAssured;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -293,6 +299,81 @@ class ExpenseApiIntegrationTest extends AbstractIntegrationTest {
         jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM expense_transaction WHERE id = ?", Integer.class, id);
     assertThat(rows).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("Повторный POST не стирает уже рассчитанные курс, сумму в USD и флаг превышения")
+  void repeatedTransactionIdKeepsCalculatedFlag() {
+    ExpenseTransaction pending =
+        intakeService.accept(
+            nextId(), ACCOUNT, COUNTERPARTY, "USD", new BigDecimal("1200.00"),
+            ExpenseCategory.PRODUCT, utc("2022-01-02"));
+    // USD не обращается к внешнему API, поэтому флаг рассчитывается полностью и детерминированно.
+    ExpenseTransaction resolved = intakeService.settle(pending.id());
+    assertThat(resolved.limitExceeded()).isTrue();
+
+    UUID id = pending.id();
+    Map<String, Object> body =
+        new HashMap<>(transactionBody("1200.00", "product", "2022-01-02T10:00:00Z"));
+    body.put("transaction_id", id.toString());
+
+    given().contentType("application/json").body(body)
+        .when().post("/api/v1/transactions")
+        .then()
+        .statusCode(202)
+        .body("status", equalTo("RATE_RESOLVED"))
+        .body("limit_exceeded", equalTo(true));
+
+    // Флаг читается из БД, а не из ответа расчёта: именно база решает, что сохранилось.
+    assertThat(jdbcTemplate.queryForObject(
+        "SELECT limit_exceeded FROM expense_transaction WHERE id = ?", Boolean.class, id)).isTrue();
+    assertThat(jdbcTemplate.queryForObject(
+        "SELECT amount_usd FROM expense_transaction WHERE id = ?", BigDecimal.class, id))
+        .isEqualByComparingTo("1200.00");
+    assertThat(jdbcTemplate.queryForObject(
+        "SELECT status FROM expense_transaction WHERE id = ?", String.class, id))
+        .isEqualTo("RATE_RESOLVED");
+  }
+
+  @Test
+  @DisplayName("Параллельная повторная доставка одного transaction_id не приводит к 409 и дублю")
+  void concurrentDuplicateDeliveryIsAcceptedOnce() throws Exception {
+    UUID id = nextId();
+    Map<String, Object> body =
+        new HashMap<>(transactionBody("500.00", "service", "2022-01-02T10:00:00Z"));
+    body.put("transaction_id", id.toString());
+    String json = objectMapper.writeValueAsString(body);
+
+    int threads = 8;
+    var pool = Executors.newFixedThreadPool(threads);
+    try {
+      List<Future<Integer>> responses = new ArrayList<>();
+      var start = new CountDownLatch(1);
+      for (int i = 0; i < threads; i++) {
+        responses.add(
+            pool.submit(
+                () -> {
+                  start.await();
+                  return given()
+                      .contentType("application/json")
+                      .body(json)
+                      .when()
+                      .post("/api/v1/transactions")
+                      .then()
+                      .extract()
+                      .statusCode();
+                }));
+      }
+      start.countDown();
+      for (Future<Integer> response : responses) {
+        assertThat(response.get(30, TimeUnit.SECONDS)).isEqualTo(202);
+      }
+    } finally {
+      pool.shutdownNow();
+    }
+
+    assertThat(jdbcTemplate.queryForObject(
+        "SELECT COUNT(*) FROM expense_transaction WHERE id = ?", Integer.class, id)).isEqualTo(1);
   }
 
   private String postTransaction(String sum, String category, String datetime) {
