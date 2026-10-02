@@ -1,6 +1,7 @@
 package com.idftech.exchangeservice.infra.config;
 
 import java.util.concurrent.ExecutorService;
+import javax.sql.DataSource;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
@@ -30,9 +31,15 @@ public class AsyncProcessingConfig {
    * <p>Один виртуальный поток на задачу: получение курса — это ожидание сети, а не вычисления, и его
    * размер задаёт не число потоков ОС, а число задач в полёте. Верхняя граница одновременного
    * выполнения обеспечивается самим пулом, см. {@link BoundedVirtualThreadExecutor}.
+   *
+   * <p>Граница проверяется против размера пула соединений, см. {@link SettlementPoolGuard}: задачи
+   * расчёта удерживают соединение, пока ждут блокировку периода, поэтому пул обязан иметь запас под
+   * приём и чтение. Проверка стоит здесь, а не в отдельном бине с {@code @PostConstruct}, чтобы
+   * пул не мог быть создан раньше неё: контекст не должен подниматься с негодной конфигурацией.
    */
   @Bean(name = "settlementExecutor", destroyMethod = "close")
-  public ExecutorService settlementExecutor(SettlementProperties properties) {
+  public ExecutorService settlementExecutor(SettlementProperties properties, DataSource dataSource) {
+    SettlementPoolGuard.checkAgainst(dataSource, properties.parallelism());
     return new BoundedVirtualThreadExecutor(properties.parallelism());
   }
 }

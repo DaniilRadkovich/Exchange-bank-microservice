@@ -87,10 +87,18 @@ public class JpaTransactionStore implements TransactionStore {
    * {@code transaction_id} (типичный сетевой ретрай с нескольких инстансов) оба увидели бы
    * «нет такой строки» и один из них получил бы нарушение первичного ключа вместо успешного
    * {@code 202}. Решение отдаётся базе, которая и делает вставку атомарной.
+   *
+   * <p>Блокировку периода приём <b>не</b> берёт, и это осознанно. Она нужна расчёту, который читает
+   * накопленную сумму; приём только вставляет строку {@code PENDING}, в накопленную сумму не
+   * входящую. Раньше здесь стоял вызов {@code ensurePeriodLock}, и приём вставал в очередь за
+   * расчётом того же «счёт + категория + месяц»: один {@code POST} ждал бы окончания всей пачки
+   * дорасчёта, а каждый такой запрос удерживал соединение пула, пока ждал. Соединение, занятое
+   * ожиданием строки, недоступно расчёту, который за этой строкой стоит, поэтому при неудачном
+   * соотношении пула и параллелизма ожидание блокировки выедало пул целиком. Регресс-тест на это —
+   * {@code ConcurrentSettlementIntegrationTest#intakeDoesNotWaitForSettlementPeriodLock}.
    */
   @Override
   public ExpenseTransaction saveIfAbsent(ExpenseTransaction transaction) {
-    ensurePeriodLock(transaction.accountFrom(), transaction.category(), transaction.period().value().toString());
     entityManager
         .createNativeQuery(INSERT_IF_ABSENT)
         .setParameter("id", transaction.id())

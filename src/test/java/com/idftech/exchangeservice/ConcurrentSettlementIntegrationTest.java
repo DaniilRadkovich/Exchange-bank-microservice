@@ -16,15 +16,19 @@ import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.sql.Statement;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.ConnectionCallback;
 
 /**
  * Поведение под конкурентной нагрузкой (ТЗ п.2: расчёт месячных лимитов).
@@ -109,6 +113,104 @@ class ConcurrentSettlementIntegrationTest extends AbstractIntegrationTest {
     // Кумулятивный флаг обязан совпадать с накопленной суммой по каждой операции, иначе
     // последовательность флагов не будет монотонной.
     assertThat(flagsAreConsistentWithRunningTotal()).isTrue();
+  }
+
+  /**
+   * Приём операции не должен ждать блокировку периода, которую держит расчёт.
+   *
+   * <p>Блокировку здесь берёт посторонняя транзакция, как её взял бы расчёт той же пары «счёт +
+   * категория + месяц». Пока она удерживается, {@code POST /transactions} обязан отработать: приём
+   * только вставляет строку {@code PENDING} и в накопленную сумму не вмешивается, а значит и
+   * блокировку расчёта ему не нужно.
+   *
+   * <p>Раньше приём вставал в очередь за этой блокировкой и удерживал соединение пула, пока ждал, —
+   * при неудачном соотношении размера пула и параллелизма ожидание выедало пул целиком и страдали
+   * уже все запросы клиента. Никакой {@code Thread.sleep}: признак проверки — приём завершился, пока
+   * блокировка ещё удерживалась.
+   */
+  @Test
+  @DisplayName("Приём транзакции не ждёт блокировку периода расчёта")
+  void intakeDoesNotWaitForSettlementPeriodLock() throws Exception {
+    jdbcTemplate.update(
+        """
+        INSERT INTO spend_period_lock (account_from, expense_category, budget_period)
+        VALUES (?, ?, ?)
+        ON CONFLICT (account_from, expense_category, budget_period) DO NOTHING
+        """,
+        ACCOUNT,
+        ExpenseCategory.PRODUCT.code(),
+        BudgetPeriod.of(YearMonth.of(2022, 1)).value().toString());
+
+    CountDownLatch lockHeld = new CountDownLatch(1);
+    CountDownLatch releaseLock = new CountDownLatch(1);
+    CountDownLatch intakeStarted = new CountDownLatch(1);
+    ExecutorService locker = Executors.newSingleThreadExecutor();
+    ExecutorService intake = Executors.newSingleThreadExecutor();
+    try {
+      Future<?> holder =
+          locker.submit(
+              () ->
+                  jdbcTemplate.execute(
+                      (ConnectionCallback<Void>)
+                          connection -> {
+                            connection.setAutoCommit(false);
+                            try (Statement statement = connection.createStatement()) {
+                              statement.execute(
+                                  "SELECT 1 FROM spend_period_lock WHERE account_from = '"
+                                      + ACCOUNT
+                                      + "' AND expense_category = 'product'"
+                                      + " AND budget_period = '2022-01' FOR UPDATE");
+                            }
+                            lockHeld.countDown();
+                            awaitQuietly(releaseLock);
+                            connection.rollback();
+                            return null;
+                          }));
+      assertThat(lockHeld.await(5, TimeUnit.SECONDS)).isTrue();
+
+      Future<ExpenseTransaction> accepted =
+          intake.submit(
+              () -> {
+                intakeStarted.countDown();
+                return intakeService.accept(
+                    nextId(),
+                    ACCOUNT,
+                    "0000009999",
+                    "USD",
+                    OPERATION_USD,
+                    ExpenseCategory.PRODUCT,
+                    OffsetDateTime.parse("2022-01-10T12:00:00Z"));
+              });
+      assertThat(intakeStarted.await(5, TimeUnit.SECONDS)).isTrue();
+
+      // Приём обязан завершиться, пока блокировка ещё удерживается. Ждать приходится до таймаута
+      // и не отпуская блокировку: если приём её ждёт, get() истечёт, и это падение теста, а не
+      // гонка измерения. Проверять «задача уже закончилась» сразу после submit нельзя: поток
+      // мог ещё не начать работать, и тест проходил бы и с блокировкой в приёме.
+      try {
+        assertThat(accepted.get(5, TimeUnit.SECONDS).id()).isNotNull();
+      } catch (TimeoutException e) {
+        throw new AssertionError(
+            "приём транзакции ждал блокировку периода расчёта: блокировка нужна только расчёту,"
+                + " который читает накопленную сумму",
+            e);
+      } finally {
+        releaseLock.countDown();
+      }
+      holder.get(10, TimeUnit.SECONDS);
+    } finally {
+      releaseLock.countDown();
+      locker.shutdownNow();
+      intake.shutdownNow();
+    }
+  }
+
+  private static void awaitQuietly(CountDownLatch latch) {
+    try {
+      latch.await(20, TimeUnit.SECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   /**
