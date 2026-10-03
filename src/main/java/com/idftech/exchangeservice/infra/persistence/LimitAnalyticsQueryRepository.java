@@ -125,6 +125,20 @@ LEFT JOIN expense_limit l
    * показывает историю изменений, и клиентский {@code GET /limits} отдаёт все записи. Остаток
    * считается от суммы каждой записи отдельно, поэтому у исторических лимитов он показывает, сколько
    * оставалось бы на момент их установки.
+   *
+   * <p>Вторая ветка {@code UNION ALL} добавляет лимит по умолчанию для тех пар, у которых есть
+   * расход в текущем месяце, но нет ни одного установленного лимита. Без неё клиент видел бы
+   * расход, посчитанный по умолчанию 1000 USD, и пустой список лимитов: тот же расчёт уже выставил
+   * флаги превышения, а лимита, по которому они считались, в ответе не было. Лимит по умолчанию
+   * физически не хранится, поэтому {@code limit_id} такой строки — {@code NULL}, а сумма, валюта и
+   * момент установки приходят параметрами из {@code LimitProperties} и {@code :periodStart}: тот же
+   * первый день месяца, что использует {@code LimitCalculator.defaultLimit}.
+   *
+   * <p>Условие «нет ни одного лимита по паре» точное: лимит не имеет срока действия, поэтому любой
+   * установленный лимит действует и на текущий месяц, и лимит по умолчанию после его установки
+   * больше не применяется. Расход, сделанный до установки лимита внутри месяца, по умолчанию не
+   * показывается — по нему флаг уже выставлен, а параметры того лимита клиент видит в
+   * {@code GET /limits/exceeded}.
    */
   @Query(
       value =
@@ -153,13 +167,31 @@ LEFT JOIN expense_limit l
             ON s.account_from = l.account_from
            AND s.expense_category = l.expense_category
           WHERE l.account_from = :accountFrom
-          ORDER BY l.limit_datetime DESC, l.id DESC
+          UNION ALL
+          SELECT NULL::uuid        AS limit_id,
+                 s.account_from     AS account_from,
+                 s.expense_category AS expense_category,
+                 CAST(:defaultSum AS NUMERIC(19, 2)) AS limit_sum,
+                 CAST(:defaultCurrency AS VARCHAR(3)) AS limit_currency,
+                 CAST(:periodStart AS TIMESTAMPTZ) AS limit_datetime,
+                 s.spent_usd AS spent_usd,
+                 CAST(:defaultSum AS NUMERIC(19, 2)) - s.spent_usd AS remaining_usd
+          FROM spent s
+          WHERE NOT EXISTS (
+              SELECT 1
+              FROM expense_limit other
+              WHERE other.account_from = s.account_from
+                AND other.expense_category = s.expense_category
+          )
+          ORDER BY limit_datetime DESC, limit_id DESC NULLS LAST
           """,
       nativeQuery = true)
   List<LimitWithSpentRow> findLimitsWithSpentAmount(
       @Param("accountFrom") String accountFrom,
       @Param("periodStart") Instant periodStart,
-      @Param("periodEnd") Instant periodEnd);
+      @Param("periodEnd") Instant periodEnd,
+      @Param("defaultSum") BigDecimal defaultSum,
+      @Param("defaultCurrency") String defaultCurrency);
 
   /** Строка проекции п.6: транзакция, лимит и накопленная сумма на момент превышения. */
   interface ExceededRow {

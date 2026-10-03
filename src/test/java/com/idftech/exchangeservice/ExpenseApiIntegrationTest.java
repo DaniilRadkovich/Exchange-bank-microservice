@@ -165,6 +165,70 @@ class ExpenseApiIntegrationTest extends AbstractIntegrationTest {
   }
 
   @Test
+  @DisplayName("GET /limits показывает лимит по умолчанию для пары без установленного лимита")
+  void defaultLimitIsShownForPairWithoutInstalledLimit() {
+    settleInDatabase("2022-01-05", "600.00");
+    settleInDatabase("2022-01-06", "500.00");
+
+    given()
+        .queryParam("account_from", ACCOUNT)
+        .when()
+        .get("/api/v1/limits")
+        .then()
+        .statusCode(200)
+        .body("$", hasSize(1))
+        // Лимита по умолчанию нет в базе, поэтому и идентификатора нет: выдумывать его нельзя.
+        .body("[0].limit_id", nullValue())
+        .body("[0].account_from", equalTo(ACCOUNT))
+        .body("[0].expense_category", equalTo("product"))
+        .body("[0].limit_sum", equalTo(1000.00f))
+        .body("[0].limit_currency_shortname", equalTo("USD"))
+        // Момент установки лимита по умолчанию — начало месяца в зоне лимитов.
+        .body("[0].limit_datetime", equalTo("2022-01-01T00:00:00Z"))
+        .body("[0].spent_usd", equalTo(1100.00f))
+        .body("[0].remaining_usd", equalTo(-100.00f));
+  }
+
+  @Test
+  @DisplayName("Лимит по умолчанию не дублирует установленный и добавляется по паре")
+  void defaultLimitIsAddedOnlyForPairWithoutInstalledLimit() {
+    limitCommandService.createLimit(ACCOUNT, ExpenseCategory.PRODUCT, new BigDecimal("2000.00"));
+    settleInDatabase("2022-01-05", "600.00");
+    settleInDatabase(ExpenseCategory.SERVICE, "2022-01-06", "300.00");
+
+    // Новые первыми: установленный лимит от 01.01 10:00 новее лимита по умолчанию от 01.01 00:00.
+    given()
+        .queryParam("account_from", ACCOUNT)
+        .when()
+        .get("/api/v1/limits")
+        .then()
+        .statusCode(200)
+        .body("$", hasSize(2))
+        .body("[0].limit_id", notNullValue())
+        .body("[0].expense_category", equalTo("product"))
+        .body("[0].limit_sum", equalTo(2000.00f))
+        .body("[0].spent_usd", equalTo(600.00f))
+        .body("[0].remaining_usd", equalTo(1400.00f))
+        .body("[1].limit_id", nullValue())
+        .body("[1].expense_category", equalTo("service"))
+        .body("[1].limit_sum", equalTo(1000.00f))
+        .body("[1].spent_usd", equalTo(300.00f))
+        .body("[1].remaining_usd", equalTo(700.00f));
+  }
+
+  @Test
+  @DisplayName("Счёт без лимитов и без расходов не получает лимит по умолчанию")
+  void accountWithoutSpendingAndLimitsHasNoRows() {
+    given()
+        .queryParam("account_from", ACCOUNT)
+        .when()
+        .get("/api/v1/limits")
+        .then()
+        .statusCode(200)
+        .body("$", hasSize(0));
+  }
+
+  @Test
   @DisplayName("Некорректный номер счёта отклоняется с 400 и ProblemDetail")
   void invalidAccountNumberIsRejected() {
     Map<String, Object> body = transactionBody("100.00", "product", "2022-01-02T10:00:00Z");
@@ -421,10 +485,14 @@ class ExpenseApiIntegrationTest extends AbstractIntegrationTest {
 
   /** Транзакция, принятая и рассчитанная в обход HTTP: нужна для подготовки read-модели. */
   private void settleInDatabase(String isoDate, String sum) {
+    settleInDatabase(ExpenseCategory.PRODUCT, isoDate, sum);
+  }
+
+  private void settleInDatabase(ExpenseCategory category, String isoDate, String sum) {
     ExpenseTransaction pending =
         intakeService.accept(
             nextId(), ACCOUNT, COUNTERPARTY, "USD", new BigDecimal(sum),
-            ExpenseCategory.PRODUCT, utc(isoDate));
+            category, utc(isoDate));
     intakeService.settle(pending.id());
   }
 

@@ -15,10 +15,19 @@ import java.util.UUID;
  * <p>Поля {@code spentUsd} и {@code remainingUsd} заполняются в {@link #ofSpent}: это расход
  * текущего месяца и остаток от последнего установленного лимита. В ответе на {@code POST /limits}
  * они пусты — на момент установки лимита расход ещё не имеет смысла показывать.
+ *
+ * <p>{@code limitId} у лимита по умолчанию равен {@code null}: клиент его не устанавливал, он не
+ * хранится в базе и идентификатора не имеет. Подставлять выдуманный идентификатор ради
+ * непустого поля нельзя — по нему не существует записи.
  */
-@Schema(description = "Месячный лимит расходов и, при наличии, факт расхода за период")
+@Schema(
+    description =
+        "Месячный лимит расходов и, при наличии, факт расхода за период. У лимита по умолчанию, "
+            + "который клиент не устанавливал, limit_id отсутствует: он не хранится в базе.")
 public record LimitResponse(
-    @JsonProperty("limit_id") UUID limitId,
+    @JsonProperty("limit_id")
+        @Schema(description = "Идентификатор установленного лимита; null у лимита по умолчанию")
+        UUID limitId,
     @JsonProperty("account_from") String accountFrom,
     @JsonProperty("expense_category") String expenseCategory,
     @JsonProperty("limit_sum") BigDecimal limitSum,
