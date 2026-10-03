@@ -39,6 +39,9 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>{@link SettlementApplier} применяет готовый курс под пессимистичной блокировкой периода.
  * </ul>
  *
+ * <p>Первая фаза возвращает {@link RateResolution}, а не «курс или ничего»: недоступность курса у
+ * провайдера и сбой нашей БД — разные события, и только второй требует внимания.
+ *
  * <p>Смешивать их в одной транзакции нельзя: тогда весь HTTP-вызов выполнялся бы под блокировкой
  * {@code spend_period_lock}, и параллельные расчёты одного счёта выстроились бы в очередь.
  *
@@ -169,12 +172,33 @@ public class TransactionIntakeService {
 
     return exchangeRateService
         .resolveUsdRate(transaction.currency().getCurrencyCode(), rateDate(transaction))
-        .map(rate -> settlementApplier.apply(transactionId, rate))
+        .map(rate -> applyRate(transactionId, rate))
         .orElseGet(
             () -> {
               settlementApplier.registerUnresolvedAttempt(transactionId);
+              log.warn(
+                  "Rate unavailable for transaction {} ({}); attempt counted, keeping PENDING for a later attempt",
+                  transactionId,
+                  transaction.currency().getCurrencyCode());
               return transaction;
             });
+  }
+
+  /**
+   * Применяет курс к транзакции, попытоку засчитывает и при сбое расчёта.
+   *
+   * <p>Попытка — это попытка независимо от причины: если расчёт упал, а счётчик не вырос, то
+   * {@code findPending} вернёт транзакцию снова, а {@code exchange.settlement.max-attempts} никогда не
+   * будет достигнут, и транзакция останется в {@code PENDING} навсегда — до перезапуска сервиса.
+   * Исключение пробрасывается вызывающему: ручной дорасчёт должен видеть причину.
+   */
+  private ExpenseTransaction applyRate(UUID transactionId, BigDecimal rate) {
+    try {
+      return settlementApplier.apply(transactionId, rate);
+    } catch (RuntimeException e) {
+      registerFailedAttempt(transactionId, e);
+      throw e;
+    }
   }
 
   /**
@@ -209,7 +233,7 @@ public class TransactionIntakeService {
       return 0;
     }
 
-    Map<UUID, Optional<BigDecimal>> rates =
+    Map<UUID, RateResolution> rates =
         parallelRateResolver.resolveRates(pending, this::rateDate, settlementExecutor);
 
     List<CompletableFuture<?>> settlements = new java.util.ArrayList<>(pending.size());
@@ -223,24 +247,69 @@ public class TransactionIntakeService {
     return pending.size();
   }
 
-  /** Применяет полученный курс; недоступный курс оставляет транзакцию в PENDING. */
+  /**
+   * Применяет полученный курс, разбирая три исхода его получения.
+   *
+   * <p>Разбирать исходы по отдельности обязательно: «курса нет» — это ожидание следующего прохода
+   * планировщика, а сбой нашей БД требует внимания и не должен выглядеть как недоступность биржи.
+   * Транзакции в пачке не зависят, поэтому и сбой расчёта, и неожиданная ошибка разбора исходов
+   * гасятся на одну задачу: остальные транзакции обязаны быть рассчитаны.
+   */
   private void applySettlement(
-      ExpenseTransaction transaction, Optional<BigDecimal> rate) {
+      ExpenseTransaction transaction, RateResolution resolution) {
     try {
-      if (rate.isPresent()) {
-        settlementApplier.apply(transaction.id(), rate.get());
-      } else {
-        settlementApplier.registerUnresolvedAttempt(transaction.id());
-        log.warn(
-            "Rate unavailable for transaction {} ({} on {}); keeping PENDING for a later attempt",
-            transaction.id(),
-            transaction.currency().getCurrencyCode(),
-            transaction.occurredAt());
+      switch (resolution) {
+        case RateResolution.Resolved resolved ->
+            settlementApplier.apply(transaction.id(), resolved.rate());
+        case RateResolution.Unavailable ignored -> registerUnavailableRate(transaction);
+        case RateResolution.Failed failed ->
+            registerFailedAttempt(transaction.id(), failed.cause());
       }
     } catch (RuntimeException e) {
-      // Транзакции не зависимы: падение одного расчёта не должно мешать остальным. Транзакция
-      // останется PENDING и попадёт в следующий проход планировщика.
-      log.warn("Settlement of transaction {} failed: {}", transaction.id(), e.toString());
+      registerFailedAttempt(transaction.id(), e);
+    }
+  }
+
+  /** Провайдер не дал курса: ждём следующего прохода, попытка засчитана как ожидание. */
+  private void registerUnavailableRate(ExpenseTransaction transaction) {
+    settlementApplier.registerUnresolvedAttempt(transaction.id());
+    log.warn(
+        "Rate unavailable for transaction {} ({} on {}); attempt counted, keeping PENDING for a later attempt",
+        transaction.id(),
+        transaction.currency().getCurrencyCode(),
+        transaction.occurredAt());
+  }
+
+  /**
+   * Считает попытку, расчёт которой сорвался, и фиксирует причину.
+   *
+   * <p>Счётчик попыток обязан расти при любом сбое, а не только когда не пришёл курс: {@code
+   * findPending} берёт транзакции, у которых попыток меньше {@code
+   * exchange.settlement.max-attempts}, поэтому не посчитанная попытка даёт бесконечный ретрай каждые
+   * {@code retry-delay} секунд и транзакция не доходит до {@code FAILED} никогда.
+   *
+   * <p>Уровень {@code ERROR} здесь, а не {@code WARN} как у недоступного курса, по существу: сбой
+   * расчёта — это либо наша ошибка, либо данные, которые мы не смогли посчитать, и оба случая требуют
+   * внимания. Подавить его нельзя и повторять вечно нельзя, поэтому транзакция доходит до
+   * {@code FAILED}, а данные остаются на месте: {@code FAILED} означает «требуется ручной дорасчёт».
+   *
+   * <p>Само фиксирование попытки тоже может не пройти (например, соединение с PostgreSQL не
+   * восстановилось). Тогда исходная ошибка не теряется, но остаётся непосчитанной попыткой: об этом
+   * отдельная запись в лог, потому что тишина была бы хуже.
+   */
+  private void registerFailedAttempt(UUID transactionId, RuntimeException cause) {
+    log.error(
+        "Settlement of transaction {} failed: {}; attempt counted, transaction stays PENDING until"
+            + " exchange.settlement.max-attempts is reached",
+        transactionId,
+        cause.toString(),
+        cause);
+    try {
+      settlementApplier.registerUnresolvedAttempt(transactionId);
+    } catch (RuntimeException registrationFailure) {
+      log.error(
+          "Could not count the failed settlement attempt of transaction {}", transactionId,
+          registrationFailure);
     }
   }
 

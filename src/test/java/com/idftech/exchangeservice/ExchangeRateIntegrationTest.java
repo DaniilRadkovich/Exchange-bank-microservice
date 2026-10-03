@@ -1,6 +1,8 @@
 package com.idftech.exchangeservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 
 import com.idftech.exchangeservice.application.ExchangeRateService;
 import com.idftech.exchangeservice.application.LimitCommandService;
@@ -23,8 +25,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 /**
  * Работа с биржевыми курсами: собственный кэш, перевод в USD и отказоустойчивость (ТЗ п.3).
@@ -33,6 +40,7 @@ import org.springframework.beans.factory.annotation.Value;
  * применение {@code previous_close}, когда торгов на дату операции не было, и сохранение транзакции в
  * статусе {@code PENDING}, когда курс получить не удалось.
  */
+@ExtendWith(OutputCaptureExtension.class)
 class ExchangeRateIntegrationTest extends AbstractIntegrationTest {
 
   private static final String ACCOUNT = "0000000123";
@@ -47,7 +55,11 @@ class ExchangeRateIntegrationTest extends AbstractIntegrationTest {
   @Autowired
   private ExchangeRateService exchangeRateService;
 
-  @Autowired
+  /**
+   * Подмена нужна одному тесту: сбой записи курса в кэш создаётся намеренно. Остальные тесты класса
+   * видят настоящий кэш, потому что подмена не переопределяет поведение не-stubbed методов.
+   */
+  @MockitoSpyBean
   private RateCache rateCache;
 
   /**
@@ -179,6 +191,55 @@ class ExchangeRateIntegrationTest extends AbstractIntegrationTest {
     assertThat(jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM exchange_rate WHERE base_currency = 'VND'", Integer.class))
         .isZero();
+  }
+
+  @Test
+  @DisplayName("Сбой записи курса в БД в пакете не выдаёт себя за недоступность биржи")
+  void cacheWriteFailureInBatchIsNotBlamedOnProvider(CapturedOutput output) {
+    // Провайдер отвечает, но запись курса в наш кэш падает: ограничение нашей схемы, а не сбой
+    // биржи. В пакете (то есть в промышленном пути) раньше это выглядело как «курс недоступен».
+    stubRate("KZT", new BigDecimal("0.0025"));
+    doThrow(new DataIntegrityViolationException("ck_exchange_rate_close_rate"))
+        .when(rateCache)
+        .save(any());
+
+    ExpenseTransaction pending =
+        intakeService.accept(
+            nextId(), ACCOUNT, "0000009999", "KZT", new BigDecimal("10000.00"),
+            ExpenseCategory.PRODUCT, utc("2022-01-10"));
+
+    intakeService.settlePending(100);
+
+    assertThat(statusInDatabase(pending.id())).isEqualTo(TransactionStatus.PENDING.name());
+    assertThat(output)
+        .contains("Settlement of transaction " + pending.id() + " failed")
+        .doesNotContain("Rate unavailable for transaction " + pending.id());
+  }
+
+  @Test
+  @DisplayName("Сумма верхней границы формата переводится в USD без переполнения колонки")
+  void maximalSumIsConvertedWithoutOverflow() {
+    // sum проходит @Digits(17, 2) — это проверка формата, — но это 17 знаков целых, и при курсе выше
+    // единицы произведение не влезало в amount_usd NUMERIC(19, 2): PostgreSQL отвечал «numeric field
+    // overflow», транзакция уходила в FAILED. Отвергать такую сумму на приёме нельзя — это потеря
+    // данных, поэтому колонка шире суммы.
+    stubRate("KWD", new BigDecimal("3.25"));
+
+    ExpenseTransaction settled =
+        settle(intakeService.accept(
+            nextId(), ACCOUNT, "0000009999", "KWD", new BigDecimal("99999999999999999.99"),
+            ExpenseCategory.PRODUCT, utc("2022-01-10")));
+
+    assertThat(settled.status()).isEqualTo(TransactionStatus.RATE_RESOLVED);
+    assertThat(settled.amountUsd()).isEqualByComparingTo("324999999999999999.97");
+    assertThat(settled.limitExceeded()).isTrue();
+    // Ровно то же значение в БД: иначе отчёт о превышении показал бы другую сумму, чем расчёт.
+    assertThat(amountUsdInDatabase(settled.id())).isEqualByComparingTo("324999999999999999.97");
+  }
+
+  private BigDecimal amountUsdInDatabase(java.util.UUID id) {
+    return jdbcTemplate.queryForObject(
+        "SELECT amount_usd FROM expense_transaction WHERE id = ?", BigDecimal.class, id);
   }
 
   private BigDecimal usdRateInDatabase(java.util.UUID id) {

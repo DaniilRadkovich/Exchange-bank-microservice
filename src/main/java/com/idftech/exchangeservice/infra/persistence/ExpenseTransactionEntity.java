@@ -54,7 +54,12 @@ public class ExpenseTransactionEntity {
   @Column(name = "usd_rate", precision = 19, scale = 10)
   private BigDecimal usdRate;
 
-  @Column(name = "amount_usd", precision = 19, scale = 2)
+  /**
+   * Сумма в USD — произведение суммы операции на курс, поэтому колонка шире {@code amount}: при курсе
+   * выше единицы произведение не помещается в {@code NUMERIC(19, 2)} и запись падала бы с «numeric
+   * field overflow». Ширины согласованы миграцией {@code 004-amount-usd-precision.sql}.
+   */
+  @Column(name = "amount_usd", precision = 30, scale = 2)
   private BigDecimal amountUsd;
 
   @Enumerated(EnumType.STRING)

@@ -7,7 +7,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -55,7 +54,7 @@ public class ParallelRateResolver {
    * Курс перевода в USD для каждой транзакции пачки.
    *
    * <p>Транзакции с одинаковой парой «валюта + дата» получают один запрос к провайдеру. Отсутствие
-   * курса не считается ошибкой: такая транзакция вернётся с пустым результатом и останется PENDING.
+   * курса не считается ошибкой: такая транзакция вернётся без курса и останется PENDING.
    *
    * <p>Метод блокирует до завершения всех запросов. Возврат до их окончания был бы гонкой: читатель
    * увидел бы пустую карту и объявил все курсы недоступными.
@@ -63,9 +62,10 @@ public class ParallelRateResolver {
    * @param pending транзакции, ожидающие расчёта
    * @param rateDate дата операции в часовом поясе лимита — по ней ищется курс закрытия
    * @param executor пул, на котором выполняются запросы; в проде это виртуальные потоки
-   * @return курс по идентификатору транзакции; отсутствие значения означает «курс не получен»
+   * @return итог получения курса по идентификатору транзакции; {@code Failed} означает сбой нашего
+   *     сервиса, а не провайдера
    */
-  public Map<UUID, Optional<BigDecimal>> resolveRates(
+  public Map<UUID, RateResolution> resolveRates(
       List<ExpenseTransaction> pending,
       Function<ExpenseTransaction, LocalDate> rateDate,
       Executor executor) {
@@ -75,15 +75,15 @@ public class ParallelRateResolver {
       return Map.of();
     }
 
-    Map<RateKey, CompletableFuture<Optional<BigDecimal>>> requests = new HashMap<>();
+    Map<RateKey, CompletableFuture<RateResolution>> requests = new HashMap<>();
     idsByKey.keySet().forEach(key -> requests.put(key, CompletableFuture.supplyAsync(
-            () -> exchangeRateService.resolveUsdRate(key.currency(), key.date()), executor)));
+            () -> resolveRate(key), executor)));
 
-    Map<UUID, Optional<BigDecimal>> result = new HashMap<>();
+    Map<UUID, RateResolution> result = new HashMap<>();
     idsByKey.forEach(
         (key, ids) -> {
-          Optional<BigDecimal> rate = joinQuietly(key, requests.get(key));
-          ids.forEach(id -> result.put(id, rate));
+          RateResolution resolution = join(key, requests.get(key));
+          ids.forEach(id -> result.put(id, resolution));
         });
 
     log.debug(
@@ -91,6 +91,20 @@ public class ParallelRateResolver {
         pending.size(),
         idsByKey.size());
     return result;
+  }
+
+  /**
+   * Курс одной пары «валюта + дата» как итог, а не как «есть или нет».
+   *
+   * <p>Граница между внешней и внутренней ошибкой проходит здесь: {@link ExchangeRateService} уже
+   * вернул пустой результат там, где не виноват никто, кроме провайдера, и выбросил наружу всё, что
+   * случилось с нашей БД.
+   */
+  private RateResolution resolveRate(RateKey key) {
+    return exchangeRateService
+        .resolveUsdRate(key.currency(), key.date())
+        .map(RateResolution::resolved)
+        .orElseGet(RateResolution::unavailable);
   }
 
   /** Группирует транзакции по паре «валюта + дата»: одна группа — один запрос к провайдеру. */
@@ -105,19 +119,31 @@ public class ParallelRateResolver {
   }
 
   /**
-   * Ждёт курс по ключу, трактуя отказ задачи как «курс недоступен».
+   * Ждёт курс по ключу, не роняя остальную пачку.
    *
-   * <p>Провал одного запроса не должен ронять всю пачку: остальные транзакции валютно независимы и
-   * должны быть рассчитаны. Транзакция без курса останется PENDING и вернётся в следующий проход.
+   * <p>Отказ одной задачи не должен мешать валютно независимым транзакциям, поэтому он не
+   * пробрасывается наружу, а становится исходом {@code Failed}. Пробрасывать его из метода нельзя:
+   * одна сломанная транзакция заблокировала бы весь проход планировщика, и очередь валютно
+   * независимых транзакций встала бы навсегда.
+   *
+   * <p>Логирования здесь нет намеренно: причина попадает в лог там, где она означает конкретное
+   * действие, — {@link TransactionIntakeService} пишет сбой как {@code ERROR} и считает попытку
+   * неудачным расчётом. Лог «курс недоступен» здесь означал бы, что виноват провайдер, а сломан
+   * может быть наш кэш курсов.
    */
-  private Optional<BigDecimal> joinQuietly(
-      RateKey key, CompletableFuture<Optional<BigDecimal>> request) {
+  private RateResolution join(RateKey key, CompletableFuture<RateResolution> request) {
     try {
       return request.join();
     } catch (RuntimeException e) {
-      log.warn(
-          "Rate resolution for {}/USD on {} failed: {}", key.currency(), key.date(), e.toString());
-      return Optional.empty();
+      Throwable cause = e.getCause() == null ? e : e.getCause();
+      if (cause instanceof Error fatal) {
+        // Исчерпание памяти и подобное — не повод считать попытки дорасчёта.
+        throw fatal;
+      }
+      return RateResolution.failed(
+          cause instanceof RuntimeException failure
+              ? failure
+              : new IllegalStateException("Rate resolution for " + key.currency() + " failed", cause));
     }
   }
 
