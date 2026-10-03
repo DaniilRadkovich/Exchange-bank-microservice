@@ -217,6 +217,49 @@ class ExpenseApiIntegrationTest extends AbstractIntegrationTest {
   }
 
   @Test
+  @DisplayName("Лимит прошлого месяца не поглощает расход текущего: остаток совпадает с флагом")
+  void previousMonthLimitDoesNotAbsorbCurrentMonthSpending() {
+    limitCommandService.createLimit(ACCOUNT, ExpenseCategory.PRODUCT, new BigDecimal("5000.00"));
+
+    // Часы уезжают в февраль: лимит января в феврале уже не действует — операция считается по
+    // умолчанию 1000 USD, и ответ лимитов обязан говорить о том же лимите, что и флаг превышения.
+    testClock.set(utc("2022-02-10").plusHours(10));
+    settleInDatabase("2022-02-05", "1100.00");
+
+    // Новые первыми: дефолт февраля от 01.02 новее январского лимита от 01.01.
+    given()
+        .queryParam("account_from", ACCOUNT)
+        .when()
+        .get("/api/v1/limits")
+        .then()
+        .statusCode(200)
+        .body("$", hasSize(2))
+        .body("[0].limit_id", nullValue())
+        .body("[0].limit_sum", equalTo(1000.00f))
+        .body("[0].limit_datetime", equalTo("2022-02-01T00:00:00Z"))
+        .body("[0].spent_usd", equalTo(1100.00f))
+        .body("[0].remaining_usd", equalTo(-100.00f))
+        // Январский лимит остаётся в истории, но февральский расход к нему не присоединяется.
+        .body("[1].limit_id", notNullValue())
+        .body("[1].limit_sum", equalTo(5000.00f))
+        .body("[1].limit_datetime", equalTo("2022-01-01T10:00:00Z"))
+        .body("[1].spent_usd", equalTo(0.00f))
+        .body("[1].remaining_usd", equalTo(5000.00f));
+
+    // Тот же лимит в ответе о превышениях: 1000, а не 5000.
+    given()
+        .queryParam("account_from", ACCOUNT)
+        .when()
+        .get("/api/v1/limits/exceeded")
+        .then()
+        .statusCode(200)
+        .body("$", hasSize(1))
+        .body("[0].limit_sum", equalTo(1000.00f))
+        .body("[0].spent_usd", equalTo(1100.00f))
+        .body("[0].exceeded_by_usd", equalTo(100.00f));
+  }
+
+  @Test
   @DisplayName("Счёт без лимитов и без расходов не получает лимит по умолчанию")
   void accountWithoutSpendingAndLimitsHasNoRows() {
     given()

@@ -1,0 +1,210 @@
+{
+  "info": {
+    "name": "ExchangeService - API Tests",
+    "description": "Comprehensive Postman collection for testing ExchangeService endpoints. Based on API contract, integration tests and spec requirements. Base URL: http://localhost:8080\n\nKey notes:\n- POST /transactions returns 202 with status PENDING (async settlement). usd_rate/amount_usd/limit_exceeded may be null initially.\n- Transaction currency normalized to uppercase; category normalized.\n- Default monthly limit is 1000 USD (for pair account+category) when no explicit limit installed; shown with limit_id null and limit_datetime = start of month (UTC).\n- limit_exceeded is cumulative over the month up to and including current transaction.\n- GET /limits returns newest limits first.\n- Errors use application/problem+json (RFC 9457) with type like https://exchangeservice.example.com/problems/...",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "accountFrom",
+      "value": "0000000123",
+      "type": "string"
+    },
+    {
+      "key": "accountTo",
+      "value": "0000009999",
+      "type": "string"
+    },
+    {
+      "key": "accountOther",
+      "value": "0000000777",
+      "type": "string"
+    },
+    {
+      "key": "transactionId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Transactions",
+      "item": [
+        {
+          "name": "POST /api/v1/transactions - Accept (202, PENDING)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_from\": \"{{accountFrom}}\",\n  \"account_to\": \"{{accountTo}}\",\n  \"currency_shortname\": \"USD\",\n  \"sum\": 1000.00,\n  \"expense_category\": \"product\",\n  \"datetime\": \"2022-01-02T10:00:00Z\",\n  \"transaction_id\": \"{{$guid}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transactions"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 202) {",
+                  "    const json = pm.response.json();",
+                  "    pm.collectionVariables.set('transactionId', json.transaction_id);",
+                  "    console.log('Saved transaction_id:', json.transaction_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/v1/transactions - No transaction_id (auto)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_from\": \"{{accountFrom}}\",\n  \"account_to\": \"{{accountTo}}\",\n  \"currency_shortname\": \"USD\",\n  \"sum\": 500.00,\n  \"expense_category\": \"service\",\n  \"datetime\": \"2022-01-03T10:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transactions"]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/transactions - lowercase fields",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_from\": \"{{accountFrom}}\",\n  \"account_to\": \"{{accountTo}}\",\n  \"currency_shortname\": \"usd\",\n  \"sum\": 100.00,\n  \"expense_category\": \"product\",\n  \"datetime\": \"2022-01-04T10:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transactions"]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/transactions - EUR (non-USD)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_from\": \"{{accountFrom}}\",\n  \"account_to\": \"{{accountTo}}\",\n  \"currency_shortname\": \"EUR\",\n  \"sum\": 100.00,\n  \"expense_category\": \"product\",\n  \"datetime\": \"2022-01-05T10:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transactions"]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/transactions - future date",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_from\": \"{{accountFrom}}\",\n  \"account_to\": \"{{accountTo}}\",\n  \"currency_shortname\": \"USD\",\n  \"sum\": 10.00,\n  \"expense_category\": \"product\",\n  \"datetime\": \"2099-12-31T23:59:59Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transactions"]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/transactions/{id} - state",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions/{{transactionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transactions", "{{transactionId}}"]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/transactions/{id} - 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions/{{$guid}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transactions", "{{$guid}}"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
