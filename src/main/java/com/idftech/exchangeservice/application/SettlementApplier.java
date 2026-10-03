@@ -7,7 +7,7 @@ import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseLimit;
 import com.idftech.exchangeservice.domain.ExpenseTransaction;
 import com.idftech.exchangeservice.domain.TransactionStatus;
-import com.idftech.exchangeservice.infra.config.SettlementProperties;
+import com.idftech.exchangeservice.application.config.SettlementProperties;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -93,10 +93,15 @@ public class SettlementApplier {
    * <p>Начиная с номера попытки, заданного в {@code exchange.settlement.max-attempts}, транзакция
    * переводится в {@code FAILED}: устранить причину автоматически не удалось, и бесконечный ретрай
    * только прятал бы это. Статус означает «требуется ручной дорасчёт», а не потерю данных.
+   *
+   * <p>Инкремент счётчика атомарен, поэтому пачка и повторный проход планировщика не могут затереть
+   * попытку друг друга. См. {@link TransactionStore#registerUnresolvedAttempt(UUID, int)}.
+   *
+   * @return {@code true}, если попытка засчитана; {@code false}, если транзакция уже рассчитана
    */
   @Transactional
-  public void registerUnresolvedAttempt(UUID transactionId) {
-    transactionStore.registerUnresolvedAttempt(transactionId, maxAttempts);
+  public boolean registerUnresolvedAttempt(UUID transactionId) {
+    return transactionStore.registerUnresolvedAttempt(transactionId, maxAttempts);
   }
 
   /**

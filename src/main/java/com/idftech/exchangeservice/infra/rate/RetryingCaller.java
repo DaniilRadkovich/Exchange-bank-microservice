@@ -1,6 +1,7 @@
 package com.idftech.exchangeservice.infra.rate;
 
-import com.idftech.exchangeservice.infra.config.RateProviderProperties;
+import com.idftech.exchangeservice.application.exception.RateCallCancelledException;
+import com.idftech.exchangeservice.application.config.RateProviderProperties;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.concurrent.ThreadLocalRandom;
@@ -25,6 +26,14 @@ import org.springframework.web.client.RestClientResponseException;
  *
  * <p>После исчерпания попыток вызывающий код получает {@code null} и продолжает работу: приём
  * транзакций не должен зависеть от доступности внешнего источника.
+ *
+ * <h2>Прерывание</h2>
+ *
+ * <p>Прерванный поток — это не отказ провайдера. Раньше {@code InterruptedException} при паузе перед
+ * повтором проглатывался, цикл доводил попытки до конца и возвращал {@code null}: остановка сервиса
+ * выглядела как недоступность биржи, а попытка дорасчёта засчитывалась как неудача. Теперь пауза
+ * бросает {@link RateCallCancelledException}, и транзакция остаётся нетронутой до следующего
+ * прохода. Прерванный поток дополнительно не начинает новых попыток вовсе.
  */
 @Component
 public class RetryingCaller {
@@ -43,6 +52,11 @@ public class RetryingCaller {
     RuntimeException lastFailure = null;
 
     for (int attempt = 1; attempt <= attempts; attempt++) {
+      if (Thread.currentThread().isInterrupted()) {
+        // Поток прерён до вызова: попытка не началась, поэтому и жаловаться провайдеру не на что.
+        throw new RateCallCancelledException(
+            operationName + " cancelled before attempt " + attempt + ": thread is interrupted", null);
+      }
       try {
         return operation.execute();
       } catch (RuntimeException e) {
@@ -62,7 +76,7 @@ public class RetryingCaller {
             attempts,
             e.toString(),
             backoff.toMillis());
-        sleep(backoff);
+        sleep(operationName, backoff);
       }
     }
 
@@ -97,11 +111,20 @@ public class RetryingCaller {
     return Duration.ofMillis(capped - jitter + ThreadLocalRandom.current().nextLong(0, 2 * jitter + 1));
   }
 
-  private void sleep(Duration duration) {
+  /**
+   * Пауза перед повтором.
+   *
+   * <p>Прерывание не возвращается молча: пауза означает, что сервис останавливают, а повтор после
+   * остановки — работа, которой никто не ждёт. Повод возвращается вызывающему как
+   * {@link RateCallCancelledException}, чтобы попытка дорасчёта не была засчитана неудачей.
+   */
+  private void sleep(String operationName, Duration duration) {
     try {
       Thread.sleep(duration.toMillis());
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
+      throw new RateCallCancelledException(
+          operationName + " cancelled while waiting " + duration.toMillis() + " ms before a retry", e);
     }
   }
 

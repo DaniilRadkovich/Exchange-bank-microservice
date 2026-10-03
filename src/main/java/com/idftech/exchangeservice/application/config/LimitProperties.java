@@ -1,4 +1,4 @@
-package com.idftech.exchangeservice.infra.config;
+package com.idftech.exchangeservice.application.config;
 
 import java.math.BigDecimal;
 import org.springframework.boot.context.properties.ConfigurationProperties;

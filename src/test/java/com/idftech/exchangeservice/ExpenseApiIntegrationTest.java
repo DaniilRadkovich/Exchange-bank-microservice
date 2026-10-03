@@ -411,6 +411,42 @@ class ExpenseApiIntegrationTest extends AbstractIntegrationTest {
   }
 
   @Test
+  @DisplayName("Не-Uuid в transaction_id отклоняется с 400, а не подменяется сгенерированным")
+  void nonUuidTransactionIdIsBadRequest() {
+    // Подмена идентификатора ломала идемпотентность: потерянный ответ банка приводил к повторной
+    // доставке, та создавала вторую запись, и месячный расход удваивался. Молча подставлять UUID
+    // нельзя — клиент должен узнать, что его идентификатор сервис не понимает.
+    Map<String, Object> body = new HashMap<>(transactionBody("100.00", "product", "2022-01-02T10:00:00Z"));
+    body.put("transaction_id", "TXN-000471");
+
+    given().contentType("application/json").body(body)
+        .when().post("/api/v1/transactions")
+        .then()
+        .statusCode(400)
+        .contentType("application/problem+json")
+        .body("type", equalTo("https://exchangeservice.example.com/problems/validation"))
+        // Название отвергнутого поля обязано быть в ответе: клиент должен понять, что именно чинить.
+        .body("errors.find { it.field == 'transaction_id' }.message", notNullValue());
+
+    // Отказ не должен оставлять следов: ни принятой транзакции, ни лишней строки-заглушки.
+    assertThat(jdbcTemplate.queryForObject(
+        "SELECT COUNT(*) FROM expense_transaction", Integer.class)).isZero();
+  }
+
+  @Test
+  @DisplayName("Пустой transaction_id означает «идентификатора нет», и сервис генерирует свой")
+  void emptyTransactionIdIsAcceptedAndGenerated() {
+    Map<String, Object> body = new HashMap<>(transactionBody("100.00", "product", "2022-01-02T10:00:00Z"));
+    body.put("transaction_id", "");
+
+    given().contentType("application/json").body(body)
+        .when().post("/api/v1/transactions")
+        .then()
+        .statusCode(202)
+        .body("transaction_id", notNullValue());
+  }
+
+  @Test
   @DisplayName("Повторный POST с тем же transaction_id не создаёт вторую запись")
   void repeatedTransactionIdIsIdempotent() {
     UUID id = UUID.randomUUID();

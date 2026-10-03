@@ -1,5 +1,8 @@
 package com.idftech.exchangeservice.infra.config;
 
+import com.idftech.exchangeservice.application.config.LimitProperties;
+import com.idftech.exchangeservice.application.config.RateProviderProperties;
+import com.idftech.exchangeservice.application.config.SettlementProperties;
 import com.idftech.exchangeservice.domain.BudgetPeriod;
 import java.time.Clock;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -15,7 +18,11 @@ import org.springframework.context.annotation.Configuration;
  * бин, что позволяет в тестах «переводить часы» и воспроизводить сценарии из таблицы ТЗ.
  */
 @Configuration
-@EnableConfigurationProperties({LimitProperties.class, RateProviderProperties.class, SettlementProperties.class})
+@EnableConfigurationProperties({
+    LimitProperties.class,
+    RateProviderProperties.class,
+    SettlementProperties.class
+})
 public class ClockConfig {
 
   /**

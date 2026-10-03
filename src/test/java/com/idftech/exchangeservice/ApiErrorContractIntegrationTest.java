@@ -115,6 +115,32 @@ class ApiErrorContractIntegrationTest extends AbstractIntegrationTest {
   }
 
   @Test
+  @DisplayName("Ошибка валидации называет поле так, как его видит клиент, а не по имени Java")
+  void validationErrorNamesFieldAsClientSendsIt() {
+    // Bean Validation называет поле по имени компонента записи: accountFrom. Клиент такого поля не
+    // присылает, он шлёт account_from, и исправлять нужно именно его. Имя берётся из @JsonProperty,
+    // поэтому тест проверяет отображение в целом, а не одно поле.
+    io.restassured.response.ValidatableResponse response =
+        given()
+            .contentType("application/json")
+            .body(
+                """
+                {"account_from": "12345", "account_to": "0000009999", "currency_shortname": "USD",
+                 "sum": 100.00, "expense_category": "product", "datetime": "2022-01-02T10:00:00Z"}
+                """
+                    .formatted(ACCOUNT))
+            .when()
+            .post("/api/v1/transactions")
+            .then();
+    assertProblem(response, 400, "https://exchangeservice.example.com/problems/validation");
+    response.body("errors[0].field", equalTo("account_from"));
+    response.body("errors[0].message", notNullValue());
+    assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM expense_transaction", Integer.class))
+        .isZero();
+  }
+
+  @Test
   @DisplayName("Health отдаёт детали компонентов, а не только статус")
   void healthExposesComponentDetails() {
     // show-details: when-authorized при отсутствии Spring Security не показал бы деталей никогда —

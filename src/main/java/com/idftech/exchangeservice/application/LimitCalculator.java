@@ -4,7 +4,7 @@ import com.idftech.exchangeservice.domain.BudgetPeriod;
 import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseLimit;
 import com.idftech.exchangeservice.domain.ExpenseTransaction;
-import com.idftech.exchangeservice.infra.config.LimitProperties;
+import com.idftech.exchangeservice.application.config.LimitProperties;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;

@@ -12,6 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.TypeMismatchException;
 import org.springframework.core.Ordered;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import java.lang.reflect.RecordComponent;
 import org.springframework.core.annotation.Order;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -134,19 +136,51 @@ public class ProblemDetailExceptionHandler {
     };
   }
 
-  /** Ошибки валидации тела запроса: 400 с перечнем полей. */
+  /**
+   * Ошибки валидации тела запроса: 400 с перечнем полей.
+   *
+   * <p>Поле называется так, как его видит клиент, а не как оно называется в Java: см. {@link
+   * #jsonFieldName}.
+   */
   @ExceptionHandler(MethodArgumentNotValidException.class)
   public ProblemDetail handleBodyValidation(MethodArgumentNotValidException e) {
     ProblemDetail problem =
         ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Параметры запроса не прошли валидацию");
     problem.setType(VALIDATION_TYPE);
     problem.setTitle("Ошибка валидации");
+    Class<?> payloadType = e.getParameter() != null ? e.getParameter().getParameterType() : null;
     List<Map<String, String>> errors =
         e.getBindingResult().getFieldErrors().stream()
-            .map(error -> Map.of("field", error.getField(), "message", String.valueOf(error.getDefaultMessage())))
+            .map(
+                error ->
+                    Map.of(
+                        "field", jsonFieldName(payloadType, error.getField()),
+                        "message", String.valueOf(error.getDefaultMessage())))
             .toList();
     problem.setProperty("errors", errors);
     return problem;
+  }
+
+  /**
+   * Имя поля в терминах JSON, то есть таким, каким его прислал клиент.
+   *
+   * <p>Bean Validation называет поле по имени компонента записи ({@code transactionId}), а клиент
+   * присылает и читает {@code transaction_id}. Ошибка с чужим именем поля бесполезна: исправлять
+   * нужно ровно то, что прислано. Имя берётся из {@code @JsonProperty} того же компонента, поэтому
+   * переименование поля в DTO не рассинхронизирует текст ошибки с контрактом. Если разобрать имя не
+   * удалось, возвращается исходное: ошибка с неверным именем поля лучше, чем ошибка без имени.
+   */
+  private static String jsonFieldName(Class<?> payloadType, String javaName) {
+    if (payloadType != null && payloadType.isRecord()) {
+      for (RecordComponent component : payloadType.getRecordComponents()) {
+        JsonProperty jsonProperty = component.getAccessor().getAnnotation(JsonProperty.class);
+        if (component.getName().equals(javaName) && jsonProperty != null
+            && !jsonProperty.value().isEmpty()) {
+          return jsonProperty.value();
+        }
+      }
+    }
+    return javaName;
   }
 
   /** Ошибки валидации параметров запроса и методов: 400. */

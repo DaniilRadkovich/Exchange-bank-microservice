@@ -1,9 +1,10 @@
 package com.idftech.exchangeservice.application;
 
+import com.idftech.exchangeservice.application.exception.RateCallCancelledException;
 import com.idftech.exchangeservice.application.port.ExchangeRateProvider;
 import com.idftech.exchangeservice.application.port.RateCache;
 import com.idftech.exchangeservice.domain.ExchangeRate;
-import com.idftech.exchangeservice.infra.config.RateProviderProperties;
+import com.idftech.exchangeservice.application.config.RateProviderProperties;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.math.BigDecimal;
@@ -139,6 +140,11 @@ public class ExchangeRateService {
     Optional<ExchangeRate> fetched;
     try {
       fetched = rateProvider.fetchDailyRate(currencyCode, date);
+    } catch (RateCallCancelledException e) {
+      // Отмена, а не отказ: ни провайдер, ни наша БД ни при чём. Возвращать пустой результат
+      // нельзя — попытка дорасчёта была бы засчитана как неудача, и при max-attempts: 1 остановка
+      // сервиса переводила бы транзакции в FAILED.
+      throw e;
     } catch (RuntimeException e) {
       // Внешний API недоступен: не роняем приём транзакций, а возвращаем пустой результат.
       log.warn("External rate provider failed for {}/{} on {}: {}", currencyCode, USD, date, e.toString());

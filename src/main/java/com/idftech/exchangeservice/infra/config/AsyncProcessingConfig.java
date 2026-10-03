@@ -1,5 +1,6 @@
 package com.idftech.exchangeservice.infra.config;
 
+import com.idftech.exchangeservice.application.config.SettlementProperties;
 import java.util.concurrent.ExecutorService;
 import javax.sql.DataSource;
 import org.springframework.context.annotation.Bean;

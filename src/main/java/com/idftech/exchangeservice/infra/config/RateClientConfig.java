@@ -1,8 +1,9 @@
 package com.idftech.exchangeservice.infra.config;
 
+import com.idftech.exchangeservice.application.config.RateProviderProperties;
 import com.idftech.exchangeservice.infra.rate.RetryingCaller;
-import io.micrometer.core.instrument.MeterRegistry;
 import com.idftech.exchangeservice.infra.rate.TwelveDataRateProvider;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;

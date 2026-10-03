@@ -1,11 +1,12 @@
 package com.idftech.exchangeservice.application;
 
+import com.idftech.exchangeservice.application.exception.RateCallCancelledException;
 import com.idftech.exchangeservice.application.exception.UnprocessableEntityException;
 import com.idftech.exchangeservice.application.port.TransactionStore;
 import com.idftech.exchangeservice.domain.BudgetPeriod;
 import com.idftech.exchangeservice.domain.ExceededTransaction;
 import com.idftech.exchangeservice.domain.ExpenseTransaction;
-import com.idftech.exchangeservice.infra.config.SettlementProperties;
+import com.idftech.exchangeservice.application.config.SettlementProperties;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDate;
@@ -158,6 +159,11 @@ public class TransactionIntakeService {
    * ещё и {@code readOnly}, то {@code SELECT ... FOR UPDATE} внутри расчёта упал бы с «cannot execute SELECT
    * FOR UPDATE in a read-only transaction».
    *
+   * <p>Попытка засчитывается при любом исходе, включая сбой получения курса на нашей стороне. Раньше
+   * исключение из {@code resolveUsdRate} выходило раньше ветки {@code orElseGet}, счётчик не рос, и
+   * ручной дорасчёт зависал в бесконечном ретрае: {@code FAILED} был недостижим ровно в том пути,
+   * который вызывает человек. Пакетный {@code settlePending} с этим был справлен, поэтому баг и жил.
+   *
    * @return транзакция после расчёта либо в статусе {@code PENDING}, если курс недоступен
    */
   public ExpenseTransaction settle(UUID transactionId) {
@@ -170,17 +176,23 @@ public class TransactionIntakeService {
       return transaction;
     }
 
-    return exchangeRateService
-        .resolveUsdRate(transaction.currency().getCurrencyCode(), rateDate(transaction))
-        .map(rate -> applyRate(transactionId, rate))
+    Optional<BigDecimal> rate;
+    try {
+      rate =
+          exchangeRateService.resolveUsdRate(
+              transaction.currency().getCurrencyCode(), rateDate(transaction));
+    } catch (RuntimeException e) {
+      // Сбой нашей стороны, а не недоступность биржи: по правилу 3 наружу выходит только он.
+      registerFailedAttempt(transactionId, e);
+      throw e;
+    }
+
+    return rate
+        .map(resolved -> applyRate(transactionId, resolved))
         .orElseGet(
             () -> {
-              settlementApplier.registerUnresolvedAttempt(transactionId);
-              log.warn(
-                  "Rate unavailable for transaction {} ({}); attempt counted, keeping PENDING for a later attempt",
-                  transactionId,
-                  transaction.currency().getCurrencyCode());
-              return transaction;
+              registerUnavailableRate(transaction);
+              return reloaded(transaction);
             });
   }
 
@@ -270,14 +282,39 @@ public class TransactionIntakeService {
     }
   }
 
-  /** Провайдер не дал курса: ждём следующего прохода, попытка засчитана как ожидание. */
+  /**
+   * Провайдер не дал курса: ждём следующего прохода, попытка засчитана как ожидание.
+   *
+   * <p>Если попытка не засчиталась, транзакцию посчитал кто-то ещё (вторая реплика или соседний
+   * проход планировщика), и курс ей больше не нужен. Это не авария, поэтому и уровень другой: сообщение
+   * уровня {@code WARN} говорило бы, что банку нужно что-то делать, когда делать нечего.
+   */
   private void registerUnavailableRate(ExpenseTransaction transaction) {
-    settlementApplier.registerUnresolvedAttempt(transaction.id());
-    log.warn(
-        "Rate unavailable for transaction {} ({} on {}); attempt counted, keeping PENDING for a later attempt",
-        transaction.id(),
-        transaction.currency().getCurrencyCode(),
-        transaction.occurredAt());
+    if (settlementApplier.registerUnresolvedAttempt(transaction.id())) {
+      log.warn(
+          "Rate unavailable for transaction {} ({} on {}); attempt counted, keeping PENDING for a later attempt",
+          transaction.id(),
+          transaction.currency().getCurrencyCode(),
+          transaction.occurredAt());
+    } else {
+      log.debug(
+          "Rate unavailable for transaction {} ({} on {}), but the transaction is already resolved; nothing to retry",
+          transaction.id(),
+          transaction.currency().getCurrencyCode(),
+          transaction.occurredAt());
+    }
+  }
+
+  /**
+   * Состояние транзакции после засчитанной попытки, а не снимок, взятый до неё.
+   *
+   * <p>Снимок устаревает в обе стороны: попытка могла перевести транзакцию в {@code FAILED}, если
+   * достигнут {@code exchange.settlement.max-attempts}, и вызывающий получил бы {@code PENDING} для
+   * транзакции, которую дорасчёту уже не подлежит. Перечитывание стоит одного SELECT и происходит
+   * только на ветке недоступного курса, то есть не на платёжном пути.
+   */
+  private ExpenseTransaction reloaded(ExpenseTransaction beforeAttempt) {
+    return transactionStore.findById(beforeAttempt.id()).orElse(beforeAttempt);
   }
 
   /**
@@ -287,6 +324,11 @@ public class TransactionIntakeService {
    * findPending} берёт транзакции, у которых попыток меньше {@code
    * exchange.settlement.max-attempts}, поэтому не посчитанная попытка даёт бесконечный ретрай каждые
    * {@code retry-delay} секунд и транзакция не доходит до {@code FAILED} никогда.
+   *
+   * <p>Отмена расчёта — единственное исключение из этого правила, и проверяется она здесь, в одном
+   * месте: {@link RateCallCancelledException} означает, что дорасчёт не состоялся по вине остановки
+   * сервиса, а не провался. Засчитывать такую попытку нельзя — при {@code max-attempts: 1} один
+   * перезапуск переводил бы в {@code FAILED} транзакции, которые никто не считал неудачными.
    *
    * <p>Уровень {@code ERROR} здесь, а не {@code WARN} как у недоступного курса, по существу: сбой
    * расчёта — это либо наша ошибка, либо данные, которые мы не смогли посчитать, и оба случая требуют
@@ -298,14 +340,23 @@ public class TransactionIntakeService {
    * отдельная запись в лог, потому что тишина была бы хуже.
    */
   private void registerFailedAttempt(UUID transactionId, RuntimeException cause) {
-    log.error(
-        "Settlement of transaction {} failed: {}; attempt counted, transaction stays PENDING until"
-            + " exchange.settlement.max-attempts is reached",
-        transactionId,
-        cause.toString(),
-        cause);
+    if (cause instanceof RateCallCancelledException) {
+      log.info(
+          "Settlement of transaction {} cancelled before the rate was applied; attempt not counted,"
+              + " the transaction stays PENDING",
+          transactionId);
+      return;
+    }
+    log.error("Settlement of transaction {} failed: {}", transactionId, cause.toString(), cause);
     try {
-      settlementApplier.registerUnresolvedAttempt(transactionId);
+      if (settlementApplier.registerUnresolvedAttempt(transactionId)) {
+        log.error(
+            "Attempt counted; the transaction stays PENDING until exchange.settlement.max-attempts"
+                + " is reached");
+      } else {
+        log.warn(
+            "Attempt not counted: transaction {} is already resolved or gone", transactionId);
+      }
     } catch (RuntimeException registrationFailure) {
       log.error(
           "Could not count the failed settlement attempt of transaction {}", transactionId,
@@ -328,10 +379,6 @@ public class TransactionIntakeService {
     return transaction.occurredAt().atZoneSameInstant(BudgetPeriod.LIMIT_TIMEZONE).toLocalDate();
   }
 
-
-  /** Заменяет в списке запись с тем же идентификатором на рассчитанный вариант. */
-
-
   /**
    * Валюта операции по коду ISO 4217.
    *
@@ -353,17 +400,19 @@ public class TransactionIntakeService {
    *
    * <p>Служит ключом идемпотентности: если банк прислал тот же {@code transaction_id}, повторная
    * обработка не создаст вторую запись. Если идентификатор не передан, сервис генерирует его сам.
+   *
+   * <p>Неразбираемое значение не подменяется сгенерированным. Раньше было наоборот: банк присылал
+   * свой идентификатор, а сервис молча выдавал случайный UUID. Ключ идемпотентности при этом менялся
+   * на каждой доставке, потерянный ответ приводил к повторной отправке, а та создавала вторую
+   * запись и удваивала расход месяца — данные не терялись только потому, что банк умел повторять.
+   * Формат проверяется на границе в {@code TransactionRequest}, поэтому сюда значение приходит уже
+   * разбираемым, а {@link IllegalArgumentException} означал бы ошибку в нашей проверке.
    */
   public UUID resolveTransactionId(String externalId) {
     if (externalId == null || externalId.isBlank()) {
       return UUID.randomUUID();
     }
-    try {
-      return UUID.fromString(externalId.trim());
-    } catch (IllegalArgumentException e) {
-      log.warn("Client sent non-UUID transaction_id '{}'; generating a new one", externalId);
-      return UUID.randomUUID();
-    }
+    return UUID.fromString(externalId.trim());
   }
 
   /** Транзакция по идентификатору либо пустой результат, если её нет. */

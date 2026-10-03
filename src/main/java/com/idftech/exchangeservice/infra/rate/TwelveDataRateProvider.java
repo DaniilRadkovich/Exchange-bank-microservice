@@ -2,7 +2,7 @@ package com.idftech.exchangeservice.infra.rate;
 
 import com.idftech.exchangeservice.application.port.ExchangeRateProvider;
 import com.idftech.exchangeservice.domain.ExchangeRate;
-import com.idftech.exchangeservice.infra.config.RateProviderProperties;
+import com.idftech.exchangeservice.application.config.RateProviderProperties;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;

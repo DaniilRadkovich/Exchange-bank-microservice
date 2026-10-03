@@ -7,7 +7,7 @@ import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseLimit;
 import com.idftech.exchangeservice.domain.ExpenseTransaction;
 import com.idftech.exchangeservice.domain.TransactionStatus;
-import com.idftech.exchangeservice.infra.config.LimitProperties;
+import com.idftech.exchangeservice.application.config.LimitProperties;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -49,6 +49,20 @@ public class JpaTransactionStore implements TransactionStore {
       INSERT INTO spend_period_lock (account_from, expense_category, budget_period)
       VALUES (:accountFrom, :expenseCategory, :budgetPeriod)
       ON CONFLICT (account_from, expense_category, budget_period) DO NOTHING
+      """;
+
+  /**
+   * Засчитывает попытку дорасчёта одной командой: инкремент и переход в {@code FAILED} считает база.
+   *
+   * <p>Правая часть {@code SET} в {@code UPDATE} всегда читает старое значение строки, поэтому
+   * {@code settlement_attempts + 1} здесь — это именно новое значение попытки.
+   */
+  private static final String REGISTER_ATTEMPT = """
+      UPDATE expense_transaction
+      SET settlement_attempts = settlement_attempts + 1,
+          status = CASE WHEN settlement_attempts + 1 >= :maxAttempts THEN :failed ELSE status END
+      WHERE id = :id
+        AND status <> :resolved
       """;
 
   private static final String INSERT_IF_ABSENT = """
@@ -173,9 +187,39 @@ public class JpaTransactionStore implements TransactionStore {
         .toList();
   }
 
+  /**
+   * Засчитывает попытку дорасчёта атомарно, без чтения счётчика в Java.
+   *
+   * <p>Раньше здесь был {@code findById} с прибавлением единицы и последующей записью сущности. Это
+   * read-modify-write, и он терял инкременты: два конкурентных дорасчёта одной транзакции (два прохода
+   * планировщика либо две реплики сервиса) читали одно и то же значение и писали одно и то же
+   * увеличенное. Счётчик зависал на месте, а вместе с ним и переход в {@code FAILED}: при {@code
+   * exchange.settlement.max-attempts: 1} транзакция не доходила до него никогда и оставалась
+   * {@code PENDING} до перезапуска сервиса. Теперь инкремент и статус вычисляет сама база, и
+   * конкурентные попытки выстраиваются в очередь на блокировке строки, а не затирают друг друга.
+   *
+   * <p>Условие {@code status <> 'RATE_RESOLVED'} обязательно. Рассчитанная транзакция попытками
+   * больше не нужна, а перевод её обратно в {@code FAILED} при заполненных курсе и сумме нарушил бы
+   * CHECK {@code ck_expense_tx_resolved_consistent} — то есть неудачный дорасчёт упал бы с ошибкой
+   * целостности вместо того, чтобы просто ничего не делать.
+   *
+   * <p>После нативного {@code UPDATE} сущность в контексте персистентности может нести старое
+   * значение счётчика. Это безопасно: решение о статусе принимает тот же {@code UPDATE}, а отбор
+   * транзакций в дорасчёт ({@link #findPending}) фильтрует по счётчику в SQL, а не по уже загруженной
+   * сущности.
+   *
+   * @return {@code true}, если попытка засчитана
+   */
   @Override
-  public void registerUnresolvedAttempt(UUID id, int maxAttempts) {
-    repository.findById(id).ifPresent(entity -> entity.registerSettlementAttempt(maxAttempts));
+  public boolean registerUnresolvedAttempt(UUID id, int maxAttempts) {
+    return entityManager
+        .createNativeQuery(REGISTER_ATTEMPT)
+        .setParameter("id", id)
+        .setParameter("maxAttempts", maxAttempts)
+        .setParameter("failed", TransactionStatus.FAILED.name())
+        .setParameter("resolved", TransactionStatus.RATE_RESOLVED.name())
+        .executeUpdate()
+        > 0;
   }
 
   /**

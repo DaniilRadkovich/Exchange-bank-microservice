@@ -19,7 +19,10 @@ import java.time.OffsetDateTime;
  * @param sum сумма транзакции, два знака после точки
  * @param expenseCategory категория расхода: {@code product} или {@code service}
  * @param datetime момент операции с часовым поясом, ISO 8601
- * @param transactionId идентификатор операции на стороне банка; необязателен, генерируется сервисом
+ * @param transactionId идентификатор операции на стороне банка: UUID в канонической форме либо пусто.
+ *     Необязателен, и тогда его генерирует сервис. Непустое значение не-Uuid отклоняется, а не
+ *     подменяется сгенерированным: подмена теряла идентификатор банка, и повторная доставка той же
+ *     операции создавала вторую запись вместо того, чтобы вернуть уже принятую
  */
 public record TransactionRequest(
     @NotBlank
@@ -45,4 +48,8 @@ public record TransactionRequest(
         @JsonProperty("expense_category")
         String expenseCategory,
     @NotNull @JsonProperty("datetime") OffsetDateTime datetime,
-    @JsonProperty("transaction_id") String transactionId) {}
+    @Pattern(
+            regexp = "^$|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+            message = "must be a UUID in canonical 8-4-4-4-12 form, or omitted")
+        @JsonProperty("transaction_id")
+        String transactionId) {}

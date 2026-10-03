@@ -1,6 +1,7 @@
 package com.idftech.exchangeservice.infra.config;
 
 import com.idftech.exchangeservice.application.LimitCalculator;
+import com.idftech.exchangeservice.application.config.LimitProperties;
 import java.time.Clock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

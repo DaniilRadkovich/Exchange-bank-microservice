@@ -17,7 +17,8 @@ description: Создать или изменить миграцию базы д
 ## Расположение и именование
 
 - Каталог: `src/main/resources/db/changelog/`
-- Нумерация по порядку применения: `001-create-schema.sql`, `002-add-settlement-index.sql`.
+- Нумерация по порядку применения: `001-create-schema.sql`, `002-unique-limit-instant.sql`,
+  `003-rate-precision.sql`, `004-amount-usd-precision.sql`. Следующий номер — 005.
 - Формат — `--liquibase formatted sql`, как в существующем `001-create-schema.sql`.
 - Файл подключается в `db/changelog.xml`: Liquibase не подхватывает файлы из каталога сам. Новый
   файл без `<include>` просто не применится, и об этом узнаёшь по падению `validate`.
