@@ -22,6 +22,12 @@ public class LimitQueryService {
 
   private static final Logger log = LoggerFactory.getLogger(LimitQueryService.class);
 
+  /**
+   * Максимальный размер страницы превышений. Без него параметр — это просто ещё один способ вытянуть
+   * с сервиса неограниченную выборку, а пагинация без предела её не удерживает.
+   */
+  static final int MAX_PAGE_SIZE = 500;
+
   private final TransactionStore transactionStore;
   private final LimitCalculator limitCalculator;
 
@@ -31,15 +37,39 @@ public class LimitQueryService {
   }
 
   /**
-   * Транзакции, превысившие месячный лимит, вместе с параметрами превышенного лимита.
+   * Страница транзакций, превысивших месячный лимит, вместе с параметрами превышенного лимита.
    *
    * <p>Результат собирается одним SQL-запросом с JOIN, подзапросом и агрегирующими функциями —
    * это прямое требование ТЗ п.6, а не оптимизация.
+   *
+   * @param limit размер страницы; {@code null} — без ограничения (потолок ответа задаёт
+   *     {@link #MAX_PAGE_SIZE}, иначе клиент одним запросом увёл бы память сервиса)
+   * @param offset сколько строк пропустить
    */
+  /** Вся выборка: потолок страницы всё равно действует, поэтому «без ограничения» означает «до потолка». */
   @Transactional(readOnly = true)
   public List<ExceededTransaction> findExceeded(String accountFrom) {
-    log.debug("Loading exceeded transactions for account {}", accountFrom);
-    return transactionStore.findExceededTransactions(accountFrom);
+    return findExceeded(accountFrom, null, 0);
+  }
+
+  @Transactional(readOnly = true)
+  public List<ExceededTransaction> findExceeded(String accountFrom, Integer limit, int offset) {
+    log.debug("Loading exceeded transactions for account {} (limit={}, offset={})", accountFrom, limit, offset);
+    return transactionStore.findExceededTransactions(
+        accountFrom, cap(limit), Math.max(0, offset));
+  }
+
+  /**
+   * Потолок одной страницы.
+   *
+   * <p>Без него параметр — это просто ещё один способ вытянуть с сервиса неограниченную выборку, а
+   * пагинация без предела её не удерживает.
+   */
+  private static Integer cap(Integer limit) {
+    if (limit == null) {
+      return MAX_PAGE_SIZE;
+    }
+    return Math.min(Math.max(limit, 1), MAX_PAGE_SIZE);
   }
 
   /**

@@ -18,7 +18,7 @@
 Нужен JDK 21. На macOS `JAVA_HOME=$(/usr/libexec/java_home -v 21)`. Нужен Docker для тестов.
 
 ```bash
-./mvnw test                                   # 176 тестов, unit + интеграционные
+./mvnw test                                   # 183 тестов, unit + интеграционные
 ./mvnw test -Dtest=LimitCalculatorTest         # один набор
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
 ```
@@ -272,6 +272,29 @@
     `ExpenseApiIntegrationTest#manualSettleRecoversFailedTransaction`,
     `#manualSettleReportsPendingWhenRateIsUnavailable`,
     `#manualSettleOfUnknownTransactionIsNotFound`.
+21. **Расчёт флага читает суффикс периода, а не весь период.** Флаг кумулятивный, поэтому каждой
+    операции нужна сумма предшествующих; перечитывание всего месяца на каждый расчёт делает пачку из
+    n операций квадратичной (замер: 800 операций одного месяца — 16.4 с вместо 11.5–15.3 с, и рост
+    2.5× на удвоение вместо 1.6×). `SettlementApplier` берёт `findResolvedInPeriodFrom` и стартует с
+    `sumResolvedInPeriodBefore`, а `LimitCalculator.computeFlags` получил начальный итог параметром:
+    у стоящих раньше накопленная сумма не меняется, поэтому их флаги пересчитывать незачем. Полный
+    период остаётся только пересчёту при смене лимита, где новый порог меняет весь месяц. Граница
+    «сумма до позиции» в SQL и в Java обязана совпадать с порядком PostgreSQL при равном времени,
+    иначе флаги суффикса разойдутся с эталоном. Регрессии:
+    `SettlementCostIntegrationTest#spentBeforeMatchesSumComputedInJava` и
+    `#largeBatchOfOnePeriodIsSettledQuickly`,
+    `LimitCalculatorTest#suffixWithSeededTotalMatchesWholePeriod`. Возврат к чтению всего периода
+    на каждый расчёт ломает только скорость, поэтому одного теста на корректность мало — Bound
+    теста по времени обязателен.
+22. **Ответ клиенту не должен противоречить сам себе.** `GET /limits` возвращает лимиты всех
+    месяцев (ТЗ требует «все лимиты»), но расход и остаток — только для текущего периода: у лимитов
+    прошлых месяцев они `null`, а `in_current_period` равен `false`. Ноль был бы враньём: в феврале
+    январский лимит выглядел бы нетронутым, и клиент получил бы «осталось 5000» против «превышен
+    лимит 1000» в `GET /limits/exceeded`. Тем же требованием ограничена выборка превышений:
+    `limit` с потолком и `offset`, а не вся выборка одним ответом. Регрессии:
+    `ExpenseApiIntegrationTest#previousMonthLimitDoesNotAbsorbCurrentMonthSpending`,
+    `#limitOfPreviousMonthIsListedWithoutCurrentMonthNumbers`, `#exceededTransactionsArePaged`.
+
 
 ## Решения, принятые сознательно
 

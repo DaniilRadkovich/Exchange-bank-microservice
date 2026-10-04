@@ -105,13 +105,19 @@ LEFT JOIN expense_limit l
            )
           WHERE r.limit_exceeded = TRUE
           ORDER BY r.occurred_at, r.transaction_id
+          -- Страница приходит прямо в SQL, а не через skip в Java: иначе база всё равно считала бы
+          -- и отдавала всю выборку, а память и сеть платили бы за отброшенные строки.
+          LIMIT CASE WHEN :limit IS NULL OR :limit <= 0 THEN NULL ELSE :limit END
+          OFFSET :offset
           """,
       nativeQuery = true)
   List<ExceededRow> findExceeded(
       @Param("accountFrom") String accountFrom,
       @Param("defaultLimitSum") BigDecimal defaultLimitSum,
       @Param("defaultCurrency") String defaultCurrency,
-      @Param("limitTimezone") String limitTimezone);
+      @Param("limitTimezone") String limitTimezone,
+      @Param("limit") Integer limit,
+      @Param("offset") int offset);
 
 /**
    * Лимиты счёта вместе с фактически потраченной суммой и остатком.
@@ -149,6 +155,15 @@ LEFT JOIN expense_limit l
    * Поэтому если лимит установили 20-го, а расход шёл с 5-го, часть расхода попала под лимит по
    * умолчанию, а остаток показан от нового лимита — приближение месячной величины. Параметры лимита
    * по каждой операции клиент видит в {@code GET /limits/exceeded}.
+   *
+   * <p>Список содержит все лимиты счёта (ТЗ требует «получение всех лимитов»), но расход и остаток
+   * считаются {@code CASE}-ом только для лимитов самого периода: у остальных они {@code NULL}, а
+   * {@code in_current_period} равен {@code false}. Ноль был бы враньём — в феврале январский лимит
+   * 1000 USD показался бы нетронутым, и клиент получил бы два противоречащих друг другу ответа об
+   * одной операции: «осталось 1000» здесь и «превышен лимит 1000» в {@code GET /limits/exceeded}.
+   * Поэтому условие периода перенесено из {@code JOIN} в проекцию: джойн по «счёт + категория»
+   * присоединяет расход периода ко всем лимитам, а решение «показывать или нет» принимает
+   * {@code CASE}.
    */
   @Query(
       value =
@@ -170,14 +185,20 @@ LEFT JOIN expense_limit l
                  l.limit_sum        AS limit_sum,
                  l.limit_currency   AS limit_currency,
                  l.limit_datetime   AS limit_datetime,
-                 COALESCE(s.spent_usd, CAST(0 AS NUMERIC(19, 2))) AS spent_usd,
-                 l.limit_sum - COALESCE(s.spent_usd, CAST(0 AS NUMERIC(19, 2))) AS remaining_usd
+                 CASE WHEN l.limit_datetime >= CAST(:periodStart AS TIMESTAMPTZ)
+                       AND l.limit_datetime < CAST(:periodEnd AS TIMESTAMPTZ)
+                      THEN COALESCE(s.spent_usd, CAST(0 AS NUMERIC(19, 2)))
+                      ELSE NULL END AS spent_usd,
+                 CASE WHEN l.limit_datetime >= CAST(:periodStart AS TIMESTAMPTZ)
+                       AND l.limit_datetime < CAST(:periodEnd AS TIMESTAMPTZ)
+                      THEN l.limit_sum - COALESCE(s.spent_usd, CAST(0 AS NUMERIC(19, 2)))
+                      ELSE NULL END AS remaining_usd,
+                 (l.limit_datetime >= CAST(:periodStart AS TIMESTAMPTZ)
+                   AND l.limit_datetime < CAST(:periodEnd AS TIMESTAMPTZ)) AS in_current_period
           FROM expense_limit l
           LEFT JOIN spent s
             ON s.account_from = l.account_from
            AND s.expense_category = l.expense_category
-           AND l.limit_datetime >= CAST(:periodStart AS TIMESTAMPTZ)
-           AND l.limit_datetime < CAST(:periodEnd AS TIMESTAMPTZ)
           WHERE l.account_from = :accountFrom
           UNION ALL
           SELECT NULL::uuid        AS limit_id,
@@ -187,7 +208,8 @@ LEFT JOIN expense_limit l
                  CAST(:defaultCurrency AS VARCHAR(3)) AS limit_currency,
                  CAST(:periodStart AS TIMESTAMPTZ) AS limit_datetime,
                  s.spent_usd AS spent_usd,
-                 CAST(:defaultSum AS NUMERIC(19, 2)) - s.spent_usd AS remaining_usd
+                 CAST(:defaultSum AS NUMERIC(19, 2)) - s.spent_usd AS remaining_usd,
+                 true AS in_current_period
           FROM spent s
           WHERE NOT EXISTS (
               SELECT 1
@@ -253,5 +275,8 @@ LEFT JOIN expense_limit l
     BigDecimal getSpentUsd();
 
     BigDecimal getRemainingUsd();
+
+    /** Принадлежит ли лимит запрошенному периоду: у остальных расход и остаток равны null. */
+    Boolean getInCurrentPeriod();
   }
 }

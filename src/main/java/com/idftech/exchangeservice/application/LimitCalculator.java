@@ -153,8 +153,31 @@ public class LimitCalculator {
    */
   public Map<UUID, Boolean> computeFlags(
       List<ExpenseTransaction> orderedTransactions, List<ExpenseLimit> limitsInPeriod) {
+    return computeFlags(orderedTransactions, limitsInPeriod, Map.of());
+  }
+
+  /**
+   * Флаги для части периода, когда накопленный итог до неё уже известен.
+   *
+   * <p>Тот же проход и то же правило, только накопленный итог начинается не с нуля, а с {@code spent}.
+   * Это позволяет считать флаги суффикса — операций начиная с той, чей флаг рассчитывается, — не
+   * перечитывая весь период: у стоящих раньше итог не меняется, а сумму до них даёт база.
+   *
+   * <p>Группировка по {@code (категория, месяц)} сохраняется и здесь: суффикс смешанного списка
+   * обязан продолжить накопление с правильным итогом своей группы, а не с чужим.
+   *
+   * @param orderedTransactions операции в порядке {@link #ordered(List)}, начиная с расчётной
+   * @param limitsInPeriod лимиты периода
+   * @param spentBefore накопленный итог перед первой операцией списка; пустой — итог с нуля, то есть
+   *     поведение {@link #computeFlags(List, List)}
+   * @return флаг по идентификатору каждой операции с рассчитанной суммой в USD
+   */
+  public Map<UUID, Boolean> computeFlags(
+      List<ExpenseTransaction> orderedTransactions,
+      List<ExpenseLimit> limitsInPeriod,
+      Map<SpendingScope, BigDecimal> spentBefore) {
     Map<UUID, Boolean> flags = new LinkedHashMap<>();
-    Map<SpendingScope, BigDecimal> runningTotals = new HashMap<>();
+    Map<SpendingScope, BigDecimal> runningTotals = new HashMap<>(spentBefore);
     for (ExpenseTransaction transaction : orderedTransactions) {
       if (transaction.amountUsd() == null) {
         continue;
@@ -167,6 +190,11 @@ public class LimitCalculator {
       flags.put(transaction.id(), exceeds(runningTotal, limitAtMoment.limitSum()));
     }
     return flags;
+  }
+
+  /** Накопленный итог одной группы «категория + месяц» на начало расчёта суффикса. */
+  public static Map<SpendingScope, BigDecimal> spendingOf(ExpenseCategory category, BudgetPeriod period, BigDecimal spent) {
+    return Map.of(new SpendingScope(category, period), spent);
   }
 
   /** Порядок транзакций в периоде: по времени, при равенстве — по идентификатору для стабильности. */
@@ -197,7 +225,7 @@ public class LimitCalculator {
    * Группа, в пределах которой суммы накапливаются: лимит в ТЗ принадлежит паре «категория +
    * месяц», поэтому расходы соседней категории или соседнего месяца в накопленный итог не входят.
    */
-  private record SpendingScope(ExpenseCategory category, BudgetPeriod period) {}
+  public record SpendingScope(ExpenseCategory category, BudgetPeriod period) {}
 
   /**
    * Порядок идентификаторов при равном времени операции — обязано совпадать с PostgreSQL.

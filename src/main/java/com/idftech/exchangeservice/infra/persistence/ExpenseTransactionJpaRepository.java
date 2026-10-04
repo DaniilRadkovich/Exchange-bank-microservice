@@ -2,6 +2,7 @@ package com.idftech.exchangeservice.infra.persistence;
 
 import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.TransactionStatus;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -31,6 +32,60 @@ public interface ExpenseTransactionJpaRepository extends JpaRepository<ExpenseTr
       @Param("category") ExpenseCategory category,
       @Param("periodStart") Instant periodStart,
       @Param("periodEnd") Instant periodEnd);
+
+  /**
+   * Разрешённые транзакции периода начиная с указанной позиции, в хронологическом порядке.
+   *
+   * <p>Часть периода, а не весь период: расчёт флага операции меняет флаги только тех, что стоят за ней
+   * по времени, а у стоящих раньше накопленная сумма не меняется. Полная выборка на каждый расчёт
+   * делала стоимость пачки квадратичной — на 800 операциях одного месяца это десятки секунд.
+   *
+   * <p>Позиция сравнивается построчно {@code (occurred_at, id)}, тем же порядком, что и при расчёте
+   * флагов: равенство только по времени не определяет, кто раньше.
+   */
+  @Query(
+      """
+      SELECT t FROM ExpenseTransactionEntity t
+      WHERE t.accountFrom = :accountFrom
+        AND t.expenseCategory = :category
+        AND t.occurredAt >= :periodStart
+        AND t.occurredAt < :periodEnd
+        AND (t.occurredAt, t.id) >= (:fromOccurredAt, :fromId)
+        AND t.status = com.idftech.exchangeservice.domain.TransactionStatus.RATE_RESOLVED
+      ORDER BY t.occurredAt, t.id
+      """)
+  List<ExpenseTransactionEntity> findResolvedInPeriodFrom(
+      @Param("accountFrom") String accountFrom,
+      @Param("category") ExpenseCategory category,
+      @Param("periodStart") Instant periodStart,
+      @Param("periodEnd") Instant periodEnd,
+      @Param("fromOccurredAt") Instant fromOccurredAt,
+      @Param("fromId") UUID fromId);
+
+  /**
+   * Накопленная сумма разрешённых транзакций периода строго до указанной позиции.
+   *
+   * <p>Суммирование делает база, а прикладной код получает одно число: перенос накопленного итога в
+   * Java означал бы снова прочитать весь период.
+   */
+  @Query(
+      """
+      SELECT COALESCE(SUM(t.amountUsd), 0)
+      FROM ExpenseTransactionEntity t
+      WHERE t.accountFrom = :accountFrom
+        AND t.expenseCategory = :category
+        AND t.occurredAt >= :periodStart
+        AND t.occurredAt < :periodEnd
+        AND (t.occurredAt, t.id) < (:beforeOccurredAt, :beforeId)
+        AND t.status = com.idftech.exchangeservice.domain.TransactionStatus.RATE_RESOLVED
+      """)
+  BigDecimal sumResolvedInPeriodBefore(
+      @Param("accountFrom") String accountFrom,
+      @Param("category") ExpenseCategory category,
+      @Param("periodStart") Instant periodStart,
+      @Param("periodEnd") Instant periodEnd,
+      @Param("beforeOccurredAt") Instant beforeOccurredAt,
+      @Param("beforeId") UUID beforeId);
 
   /** Транзакции, ожидающие дорасчёта, с наименьшим временем совершения. */
   @Query(

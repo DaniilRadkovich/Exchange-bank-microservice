@@ -164,22 +164,38 @@ public class SettlementApplier {
     // округление курса и произведение amount × rate жили бы в двух местах и разъехались бы.
     ExpenseTransaction resolvedCandidate = transaction.resolved(rate, false);
 
-    List<ExpenseTransaction> periodTransactions =
+    // Только суффикс периода, начиная с расчётной операции. У стоящих раньше накопленная сумма не
+    // меняется, поэтому их флаги пересчитывать незачем, а накопленный итог до них даёт база одной
+    // строкой. Читать весь период на каждый расчёт — значит платить за пачку квадратично: на 800
+    // операциях одного месяца это десятки секунд вместо секунд.
+    List<ExpenseTransaction> suffix =
         withCandidate(
-            transactionStore.findResolvedInPeriod(
-                transaction.accountFrom(), transaction.category(), period),
+            transactionStore.findResolvedInPeriodFrom(
+                transaction.accountFrom(), transaction.category(), period, resolvedCandidate),
             resolvedCandidate);
-    List<ExpenseTransaction> ordered = LimitCalculator.ordered(periodTransactions);
+    List<ExpenseTransaction> ordered = LimitCalculator.ordered(suffix);
+    BigDecimal spentBefore =
+        transactionStore.sumResolvedInPeriodBefore(
+            transaction.accountFrom(), transaction.category(), period, resolvedCandidate);
 
     List<ExpenseLimit> limits =
         limitStore.findLimitsInPeriod(transaction.accountFrom(), transaction.category(), period);
     ExpenseLimit effectiveLimit = limitCalculator.effectiveLimit(resolvedCandidate, limits);
-    boolean exceeded = limitCalculator.isExceeded(resolvedCandidate, effectiveLimit, ordered);
+
+    // Флаги суффикса считаются с накопленного итога, и флаг самой операции — первый из них. Отдельный
+    // пооперационный расчёт дал бы то же значение, но стал бы вторым правилом для одной величины.
+    Map<UUID, Boolean> flags =
+        limitCalculator.computeFlags(
+            ordered,
+            limits,
+            LimitCalculator.spendingOf(
+                resolvedCandidate.category(), resolvedCandidate.period(), spentBefore));
+    boolean exceeded = Boolean.TRUE.equals(flags.get(resolvedCandidate.id()));
 
     ExpenseTransaction settled = resolvedCandidate.withLimitExceeded(exceeded);
     transactionStore.updateSettlement(settled);
 
-    int refreshed = refreshStaleFlagsAfter(ordered, limits, resolvedCandidate);
+    int refreshed = storeChangedFlags(ordered, flags, resolvedCandidate);
 
     log.info(
         "Transaction {} settled: {} {} -> {} USD at rate {}, limit {} USD exceeded={} ({} stale flag(s) refreshed)",
@@ -195,33 +211,11 @@ public class SettlementApplier {
   }
 
   /**
-   * Пересчитывает флаги операций, чей кумулятивный итог изменился из-за вновь рассчитанной операции.
+   * Записывает только изменившиеся флаги, чтобы не делать лишних UPDATE.
    *
-   * <p>Флаг по ТЗ кумулятивный: он сравнивает накопленную сумму месяца «до и включая» операцию. Значит
-   * операция с ранней датой, дошедшая до расчёта позже операций с поздними датами, увеличивает
-   * накопленный итог и для них. Если такие флаги не обновлять, они навсегда остаются заниженными:
-   * пересчёт придёт следующим расчётом, но между ними клиент увидит неверный отчёт.
-   *
-   * <p>Поэтому после каждого расчёта флаги приводятся в соответствие с текущим набором операций
-   * периода. Период уже заблокирован, поэтому гонки с параллельным расчётом нет.
-   *
-   * @param ordered все разрешённые операции периода, включая только что рассчитанную
-   * @param limits лимиты периода
-   * @param settled только что рассчитанная операция; её флаг уже записан
-   * @return сколько флагов изменилось
-   */
-  private int refreshStaleFlagsAfter(
-      List<ExpenseTransaction> ordered, List<ExpenseLimit> limits, ExpenseTransaction settled) {
-    return storeChangedFlags(ordered, limitCalculator.computeFlags(ordered, limits), settled);
-  }
-
-  /**
-   * Пересчитывает флаги и записывает только изменившиеся, чтобы не делать лишних UPDATE.
-   *
-   * <p>Флаги приходят одним проходом {@link LimitCalculator#computeFlags(List, List)}: сумма
-   * накапливается по мере обхода, поэтому стоимость линейна по числу операций периода. Считать
-   * накопленный итог отдельно для каждой операции было бы квадратичным расчётом на каждом расчёте
-   * транзакции и на каждой смене лимита.
+   * <p>Флаги приходят готовыми: суффикс периода посчитан проходом {@link LimitCalculator#computeFlags}
+   * с накопленным итогом, а полный период — при смене лимита. Считать накопленный итог отдельно для
+   * каждой операции было бы квадратичным расчётом на каждом расчёте транзакции.
    *
    * @param flags флаги по идентификатору, посчитанные для всего периода
    * @param skip операция, чей флаг уже записан и которую надо пропустить; {@code null} — пересчитать

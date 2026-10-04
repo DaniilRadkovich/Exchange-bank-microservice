@@ -363,6 +363,70 @@ class LimitCalculatorTest {
       assertThat(flags.get(ordered.get(LARGE_PERIOD - 1).id())).isTrue();
     }
 
+    @Test
+    @DisplayName("суффикс с накопленным итогом даёт те же флаги, что и весь период")
+    void suffixWithSeededTotalMatchesWholePeriod() {
+      // Расчёт операции читает только суффикс периода и стартует с накопленной суммы, которую
+      // посчитала база. Если хотя бы одно из двух не совпадёт с правилом, флаги разъедутся с
+      // эталоном — и клиент увидит «превышение» с другой суммой.
+      List<ExpenseLimit> limits =
+          List.of(limit("2022-01-01", "1000.00"), limit("2022-01-10", "2000.00"));
+      List<ExpenseTransaction> period =
+          List.of(
+              usd("2022-01-02", "500.00"),
+              usd("2022-01-03", "600.00"),
+              usd("2022-01-11", "100.00"),
+              usd("2022-01-12", "700.00"),
+              usd("2022-01-13", "100.00"),
+              usd("2022-01-13", "100.00"));
+      List<ExpenseTransaction> ordered = LimitCalculator.ordered(period);
+      Map<UUID, Boolean> wholePeriod = expectedFlags(period, limits);
+
+      for (int startIndex = 0; startIndex < ordered.size(); startIndex++) {
+        ExpenseTransaction first = ordered.get(startIndex);
+        BigDecimal spentBefore = spentBefore(ordered, first);
+        List<ExpenseTransaction> suffix = ordered.subList(startIndex, ordered.size());
+
+        Map<UUID, Boolean> flags =
+            calculator.computeFlags(
+                suffix, limits, LimitCalculator.spendingOf(first.category(), first.period(), spentBefore));
+
+        // Эталон — флаги, посчитанные пооперационно по всему периоду, ограниченные суффиксом.
+        Map<UUID, Boolean> expected = new LinkedHashMap<>();
+        for (ExpenseTransaction target : suffix) {
+          expected.put(target.id(), wholePeriod.get(target.id()));
+        }
+
+        assertThat(flags)
+            .as("суффикс с %s и накопленным итогом %s", first.occurredAt(), spentBefore)
+            .containsExactlyEntriesOf(expected);
+      }
+    }
+
+    /**
+     * Накопленная сумма строго до позиции — ровно то, что база отдаёт запросом суммы.
+     *
+     * <p>Порядок при равном времени повторяет порядок PostgreSQL (сравнение канонического текста
+     * UUID), иначе «сумма до» посчиталась бы иначе, чем в SQL, и флаги суффикса разошлись бы.
+     */
+    private static BigDecimal spentBefore(List<ExpenseTransaction> ordered, ExpenseTransaction target) {
+      BigDecimal total = BigDecimal.ZERO;
+      for (ExpenseTransaction transaction : ordered) {
+        if (!transaction.isResolved()
+            || transaction.category() != target.category()
+            || !transaction.period().equals(target.period())) {
+          continue;
+        }
+        int byTime = transaction.occurredAt().compareTo(target.occurredAt());
+        boolean before =
+            byTime < 0 || (byTime == 0 && transaction.id().toString().compareTo(target.id().toString()) < 0);
+        if (before) {
+          total = total.add(transaction.amountUsd());
+        }
+      }
+      return total;
+    }
+
     /** Флаги, посчитанные пооперационно: эталон для проверки пакетного расчёта. */
     private Map<UUID, Boolean> expectedFlags(
         List<ExpenseTransaction> period, List<ExpenseLimit> limits) {

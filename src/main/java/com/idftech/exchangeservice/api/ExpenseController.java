@@ -19,6 +19,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import java.util.List;
 import java.util.Locale;
@@ -166,13 +167,23 @@ public class ExpenseController {
       summary = "Транзакции, превысившие лимит (ТЗ п.6)",
       description =
           "Возвращает превышения вместе с параметрами превышенного лимита: датой установки, суммой и "
-              + "валютой.")
+              + "валютой. Выборка постраничная: по умолчанию возвращается первая страница, "
+              + "`limit` ограничен значением LimitQueryService.MAX_PAGE_SIZE.")
   public List<ExceededTransactionResponse> getExceeded(
       @Parameter(description = "Банковский счёт клиента", example = "0000000123")
           @RequestParam("account_from")
           @Pattern(regexp = "\\d{10}", message = "must contain exactly 10 digits")
-          String accountFrom) {
-    List<ExceededTransaction> exceeded = limitQueryService.findExceeded(accountFrom);
+          String accountFrom,
+      @Parameter(description = "Размер страницы; по умолчанию и не больше 500")
+          @RequestParam(name = "limit", required = false)
+          @Min(value = 1, message = "must be at least 1")
+          Integer limit,
+      @Parameter(description = "Сколько превышений пропустить")
+          @RequestParam(name = "offset", defaultValue = "0")
+          @Min(value = 0, message = "must not be negative")
+          int offset) {
+    List<ExceededTransaction> exceeded =
+        limitQueryService.findExceeded(accountFrom, limit, offset);
     return ExceededTransactionResponse.of(exceeded);
   }
 }

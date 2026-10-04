@@ -185,6 +185,32 @@ public class JpaTransactionStore implements TransactionStore {
         .toList();
   }
 
+  @Override
+  @Transactional(readOnly = true)
+  public List<ExpenseTransaction> findResolvedInPeriodFrom(
+      String accountFrom, ExpenseCategory category, BudgetPeriod period, ExpenseTransaction from) {
+    JpaLimitStore.PeriodBounds bounds = JpaLimitStore.bounds(period);
+    return repository
+        .findResolvedInPeriodFrom(
+            accountFrom, category, bounds.start(), bounds.endExclusive(),
+            from.occurredAt().toInstant(), from.id())
+        .stream()
+        .map(this::toDomain)
+        .toList();
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public BigDecimal sumResolvedInPeriodBefore(
+      String accountFrom, ExpenseCategory category, BudgetPeriod period, ExpenseTransaction before) {
+    JpaLimitStore.PeriodBounds bounds = JpaLimitStore.bounds(period);
+    BigDecimal sum =
+        repository.sumResolvedInPeriodBefore(
+            accountFrom, category, bounds.start(), bounds.endExclusive(),
+            before.occurredAt().toInstant(), before.id());
+    return sum == null ? BigDecimal.ZERO : sum;
+  }
+
   /**
    * Пишет только результат расчёта: курс, сумму в USD и флаг превышения.
    *
@@ -337,13 +363,16 @@ public class JpaTransactionStore implements TransactionStore {
 
   @Override
   @Transactional(readOnly = true)
-  public List<ExceededTransaction> findExceededTransactions(String accountFrom) {
+  public List<ExceededTransaction> findExceededTransactions(
+      String accountFrom, Integer limit, int offset) {
     return analyticsRepository
         .findExceeded(
             accountFrom,
             limitProperties.defaultSum(),
             limitProperties.defaultCurrency(),
-            BudgetPeriod.LIMIT_TIMEZONE.getId())
+            BudgetPeriod.LIMIT_TIMEZONE.getId(),
+            limit,
+            Math.max(0, offset))
         .stream()
         .map(this::toExceeded)
         .toList();
@@ -370,7 +399,8 @@ public class JpaTransactionStore implements TransactionStore {
             Currency.getInstance(row.getLimitCurrency()),
             row.getLimitDatetime().atOffset(ZoneOffset.UTC),
             row.getSpentUsd(),
-            row.getRemainingUsd()))
+            row.getRemainingUsd(),
+            Boolean.TRUE.equals(row.getInCurrentPeriod())))
         .toList();
   }
 

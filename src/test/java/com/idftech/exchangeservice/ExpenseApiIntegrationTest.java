@@ -221,6 +221,93 @@ class ExpenseApiIntegrationTest extends AbstractIntegrationTest {
   }
 
   @Test
+  @DisplayName("Лимит прошлого месяца остаётся в списке, но без расхода и остатка")
+  void limitOfPreviousMonthIsListedWithoutCurrentMonthNumbers() {
+    // История лимитов нужна клиенту, а вот её числа за текущий месяц — враньё: в феврале январский
+    // лимит 1000 USD выглядел бы нетронутым, и это противоречило бы превышению по январским же
+    // операциям в GET /limits/exceeded. Поэтому у строки прошлого месяца расход и остаток null,
+    // а in_current_period отличает её от действующей.
+    testClock.set(utc("2022-01-01").plusHours(10));
+    limitCommandService.createLimit(ACCOUNT, ExpenseCategory.PRODUCT, new BigDecimal("1000.00"));
+    settleInDatabase("2022-01-20", "1500.00");
+
+    testClock.set(utc("2022-02-10").plusHours(10));
+    settleInDatabase("2022-02-05", "100.00");
+
+    given()
+        .queryParam("account_from", ACCOUNT)
+        .when()
+        .get("/api/v1/limits")
+        .then()
+        .statusCode(200)
+        // Две строки: февральский лимит по умолчанию (в феврале есть расход, а своего лимита нет)
+        // и январский лимит в истории — без чисел за текущий месяц.
+        .body("$", hasSize(2))
+        .body("[0].limit_datetime", equalTo("2022-02-01T00:00:00Z"))
+        .body("[0].spent_usd", equalTo(100.00f))
+        .body("[0].in_current_period", equalTo(true))
+        .body("[1].limit_datetime", equalTo("2022-01-01T10:00:00Z"))
+        .body("[1].spent_usd", nullValue())
+        .body("[1].remaining_usd", nullValue())
+        .body("[1].in_current_period", equalTo(false));
+  }
+
+  @Test
+  @DisplayName("Превышения отдаются постранично: limit и offset не теряют и не дублируют строки")
+  void exceededTransactionsArePaged() {
+    testClock.set(utc("2022-01-01").plusHours(10));
+    limitCommandService.createLimit(ACCOUNT, ExpenseCategory.PRODUCT, new BigDecimal("1000.00"));
+    for (int day = 1; day <= 5; day++) {
+      settleInDatabase("2022-01-%02d".formatted(day), "300.00");
+    }
+    // Первые три операции по 300 дают 900 — без превышения; с четвёртой идёт 1200, и дальше сумма
+    // только растёт, то есть превышены операции с 4-го по 5-й.
+
+    given()
+        .queryParam("account_from", ACCOUNT)
+        .queryParam("limit", 1)
+        .when()
+        .get("/api/v1/limits/exceeded")
+        .then()
+        .statusCode(200)
+        .body("$", hasSize(1))
+        .body("[0].datetime", equalTo("2022-01-04T00:00:00Z"));
+
+    given()
+        .queryParam("account_from", ACCOUNT)
+        .queryParam("limit", 1)
+        .queryParam("offset", 1)
+        .when()
+        .get("/api/v1/limits/exceeded")
+        .then()
+        .statusCode(200)
+        .body("$", hasSize(1))
+        .body("[0].datetime", equalTo("2022-01-05T00:00:00Z"));
+
+    // Без параметров — вся выборка, как и до появления пагинации.
+    given()
+        .queryParam("account_from", ACCOUNT)
+        .when()
+        .get("/api/v1/limits/exceeded")
+        .then()
+        .statusCode(200)
+        .body("$", hasSize(2));
+  }
+
+  @Test
+  @DisplayName("Неположительный limit отклоняется как ошибка формата")
+  void nonPositivePageSizeIsRejected() {
+    given()
+        .queryParam("account_from", ACCOUNT)
+        .queryParam("limit", 0)
+        .when()
+        .get("/api/v1/limits/exceeded")
+        .then()
+        .statusCode(400)
+        .contentType("application/problem+json");
+  }
+
+  @Test
   @DisplayName("Лимит прошлого месяца не поглощает расход текущего: остаток совпадает с флагом")
   void previousMonthLimitDoesNotAbsorbCurrentMonthSpending() {
     limitCommandService.createLimit(ACCOUNT, ExpenseCategory.PRODUCT, new BigDecimal("5000.00"));
@@ -243,12 +330,16 @@ class ExpenseApiIntegrationTest extends AbstractIntegrationTest {
         .body("[0].limit_datetime", equalTo("2022-02-01T00:00:00Z"))
         .body("[0].spent_usd", equalTo(1100.00f))
         .body("[0].remaining_usd", equalTo(-100.00f))
-        // Январский лимит остаётся в истории, но февральский расход к нему не присоединяется.
+        .body("[0].in_current_period", equalTo(true))
+        // Январский лимит остаётся в истории, но февральский расход к нему не присоединяется, а его
+        // собственные числа за январь в ответ не попадают: null вместо нуля, иначе клиент прочитал бы
+        // «осталось 5000» и «февраль ничего не потратил» там, где январь уже превышен.
         .body("[1].limit_id", notNullValue())
         .body("[1].limit_sum", equalTo(5000.00f))
         .body("[1].limit_datetime", equalTo("2022-01-01T10:00:00Z"))
-        .body("[1].spent_usd", equalTo(0.00f))
-        .body("[1].remaining_usd", equalTo(5000.00f));
+        .body("[1].spent_usd", nullValue())
+        .body("[1].remaining_usd", nullValue())
+        .body("[1].in_current_period", equalTo(false));
 
     // Тот же лимит в ответе о превышениях: 1000, а не 5000.
     given()

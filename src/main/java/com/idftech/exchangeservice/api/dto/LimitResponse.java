@@ -19,6 +19,11 @@ import java.util.UUID;
  * <p>{@code limitId} у лимита по умолчанию равен {@code null}: клиент его не устанавливал, он не
  * хранится в базе и идентификатора не имеет. Подставлять выдуманный идентификатор ради
  * непустого поля нельзя — по нему не существует записи.
+ *
+ * <p>{@code spentUsd} и {@code remainingUsd} заполнены только для лимитов текущего месяца: у
+ * лимитов других месяцев они {@code null}, а {@code inCurrentPeriod} равен {@code false}. Так клиент
+ * отличает «потрачено 0» от «этот лимит не про текущий месяц» и не читает нулевой остаток по
+ * январскому лимиту как «лимит не тронут».
  */
 @Schema(
     description =
@@ -34,7 +39,12 @@ public record LimitResponse(
     @JsonProperty("limit_currency_shortname") String limitCurrencyShortname,
     @JsonProperty("limit_datetime") OffsetDateTime limitDatetime,
     @JsonProperty("spent_usd") BigDecimal spentUsd,
-    @JsonProperty("remaining_usd") BigDecimal remainingUsd) {
+    @JsonProperty("remaining_usd") BigDecimal remainingUsd,
+    @JsonProperty("in_current_period")
+        @Schema(
+            description =
+                "Относится ли лимит к текущему месяцу; у лимитов прошлых месяцев расход и остаток null")
+        boolean inCurrentPeriod) {
 
   /** Ответ без статистики расхода: обычный GET списка лимитов. */
   public static LimitResponse of(ExpenseLimit limit) {
@@ -46,7 +56,8 @@ public record LimitResponse(
         limit.currency().getCurrencyCode(),
         limit.limitDatetime(),
         null,
-        null);
+        null,
+        false);
   }
 
   /** Разворачивает список лимитов в ответ API. */
@@ -64,7 +75,8 @@ public record LimitResponse(
         limit.limitCurrency().getCurrencyCode(),
         limit.limitDatetime(),
         limit.spentUsd(),
-        limit.remainingUsd());
+        limit.remainingUsd(),
+        limit.inCurrentPeriod());
   }
 
   /** Разворачивает список лимитов с расходом в ответ API. */
