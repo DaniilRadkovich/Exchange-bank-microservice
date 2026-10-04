@@ -19,8 +19,22 @@ REST Assured, JUnit 5, AssertJ, Lombok, logback + logstash-logback-encoder.
 Нужен Docker (для тестов) и JDK 21. Сервис вместе с БД поднимается одной командой:
 
 ```bash
-RATES_API_KEY=<ключ> docker compose up --build
+docker compose up --build
 ```
+
+Docker Compose читает `.env` из корня репозитория сам, поэтому ключ и остальные параметры
+достаточно положить в `.env` (файл в `.gitignore`, в репозиторий не попадает):
+
+```dotenv
+RATES_API_PROVIDER=twelvedata
+RATES_API_BASE_URL=https://api.twelvedata.com
+RATES_API_KEY=<ключ>
+EXCHANGE_READONLY_PASSWORD=<пароль пользователя БД только для чтения>
+```
+
+Эквивалентно — переменные в сессии: `RATES_API_KEY=<ключ> docker compose up --build`.
+Без ключа контейнер не поднимется: `exchange.rates.api-key` проверяется на старте (`@NotBlank`),
+поэтому «здоровый» сервис, отправляющий каждую операцию в `FAILED`, невозможен.
 
 Либо вручную, если БД уже есть: Схема создаётся Liquibase при старте, отдельная ручная
 подготовка БД не нужна.
@@ -31,6 +45,7 @@ docker run -d --name exchange-db -p 5432:5432 \
   -e POSTGRES_DB=exchange -e POSTGRES_USER=exchange -e POSTGRES_PASSWORD=exchange \
   postgres:17-alpine
 
+set -a && source .env && set +a   # Spring Boot файл .env не читает, переменные нужны в окружении
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
@@ -47,9 +62,14 @@ PostgreSQL: `when-authorized` при отсутствии Spring Security не �
 ```
 
 Конфигурация задаётся переменными окружения: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`,
-`DB_POOL_SIZE`, `RATES_API_BASE_URL`, `RATES_API_KEY`. Профили `dev`, `test`, `prod`
-(см. `src/main/resources/application*.yaml`). `RATES_API_KEY` обязателен, а `RATES_API_BASE_URL` —
-схема: без них сервис не поднимается, а не «стартует здоровым и падает на каждом запросе курса».
+`DB_POOL_SIZE`, `RATES_API_PROVIDER`, `RATES_API_BASE_URL`, `RATES_API_KEY`. Профили `dev`, `test`,
+`prod` (см. `src/main/resources/application*.yaml`).
+
+Секретов в репозитории нет: у всех таких переменных в YAML пустое или заведомо небоевое значение по
+умолчанию, поэтому `grep` по отслеживаемым файлам не находит ни ключа, ни пароля. `RATES_API_KEY`
+обязателен, `RATES_API_BASE_URL` должен содержать схему, а `RATES_API_PROVIDER` должен совпадать с
+адаптером, объявленным в `RateClientConfig`: без этого сервис не поднимается с понятной ошибкой
+конфигурации, а не «стартует здоровым и падает на каждом запросе курса».
 
 ## Часовой пояс границ месяца: UTC
 

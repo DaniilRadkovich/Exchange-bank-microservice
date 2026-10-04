@@ -114,8 +114,12 @@ public AlphaVantageRateProvider alphaVantageRateProvider(
 ```yaml
 exchange:
   rates:
-    provider: alphavantage    # twelvedata | alphavantage | ...
+    provider: ${RATES_API_PROVIDER:alphavantage}   # twelvedata | alphavantage | ...
 ```
+
+Значение по умолчанию обязано совпадать с `havingValue` бина, у которого `matchIfMissing = true`:
+именно оно выбирает провайдера по умолчанию. Форму `${RATES_API_PROVIDER:...}` не заменяй на
+константу — переменная позволяет переключить провайдера на стенде, не правя репозиторий.
 
 `matchIfMissing = true` обязателен у провайдера по умолчанию (`twelvedata`): иначе сервис не
 поднимется с текущим `application.yaml`. Условие по `provider` гарантирует, что активен ровно один

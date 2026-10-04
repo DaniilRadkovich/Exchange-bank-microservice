@@ -4,8 +4,10 @@
 # Логи сервиса в этом compose — JSON (профиль prod, см. application-prod.yaml и logback-prod.xml).
 # Локальная разработка с отладочным выводом и SQL — ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
 #
-# Ключ внешнего API курсов и пароль пользователя БД только для чтения задаются окружением:
+# Ключ внешнего API курсов и пароль пользователя БД только для чтения задаются окружением.
+# Docker Compose читает .env из каталога проекта сам, поэтому достаточно заполнить его:
 #   RATES_API_KEY=... EXCHANGE_READONLY_PASSWORD=... docker compose up --build
+# Без ключа в окружении контейнер не поднимется: api-key проверяется на старте (@NotBlank).
 
 services:
   postgres:
@@ -44,7 +46,10 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/exchange
       DB_USERNAME: exchange
       DB_PASSWORD: exchange
-      # Ключ внешнего API курсов задаётся окружением и в репозиторий не попадает.
+      # Параметры внешнего API курсов задаются окружением и в репозиторий не попадают.
+      # Compose подставляет их из .env или из переменных сессии.
+      RATES_API_PROVIDER: ${RATES_API_PROVIDER:-twelvedata}
+      RATES_API_BASE_URL: ${RATES_API_BASE_URL:-https://api.twelvedata.com}
       RATES_API_KEY: ${RATES_API_KEY:-}
     ports:
       - "8080:8080"

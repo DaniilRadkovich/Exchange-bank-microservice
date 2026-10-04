@@ -50,9 +50,13 @@ exchange:
     default-currency: USD
   rates:
     # Внешний провайдер дневных курсов; конкретный API выбирается в README.
-    provider: twelvedata
+    # Значение выбирает бин адаптера (@ConditionalOnProperty в RateClientConfig), поэтому
+    # незнакомое значение останавливает старт, а не подставляет молча провайдера по умолчанию.
+    provider: ${RATES_API_PROVIDER:twelvedata}
     base-url: ${RATES_API_BASE_URL:https://api.twelvedata.com}
-    api-key: ${RATES_API_KEY:8747cbabfe5241e989c82c68104f784e}
+    # Ключ приходит только из переменной окружения, значение по умолчанию пустое: секрет в
+    # репозитории не лежит, а сервис без ключа не поднимается (@NotBlank в RateProviderProperties).
+    api-key: ${RATES_API_KEY:}
     connect-timeout: 2s
     read-timeout: 3s
     # Насколько старым может быть резервный курс, если в БД нет закрытия на дату операции.
