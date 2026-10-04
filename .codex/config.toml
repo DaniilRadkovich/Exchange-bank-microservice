@@ -1,17 +1,15 @@
 # Конфигурация MCP для Codex. Тот же сервер, что и в .mcp.json: протокол MCP единый,
-# различается только файл, в котором он описан.
+# различается только файл и способ чтения пароля.
 # Секреты не коммитятся: значения берутся из переменных окружения.
+#
+# Сервер PostgreSQL принимает подключение URL аргументом командной строки, а не из переменных
+# PGHOST/PGUSER/PGPASSWORD, поэтому URL собирается в оболочке из переменных, которые Codex
+# пересылает по имени (env_vars). Подстановки ${VAR} в args Codex не делает — отсюда sh -c.
 
 [mcp_servers.postgres]
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-postgres"]
-
-[mcp_servers.postgres.env]
-PGHOST = "${PGHOST}"
-PGPORT = "${PGPORT}"
-PGDATABASE = "${PGDATABASE}"
-PGUSER = "${PGUSER}"
-PGPASSWORD = "${PGPASSWORD}"
+command = "sh"
+args = ["-c", "exec npx -y @modelcontextprotocol/server-postgres \"postgresql://$PGUSER:$PGPASSWORD@$PGHOST:$PGPORT/$PGDATABASE\""]
+env_vars = ["PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD"]
 
 [mcp_servers.context7]
 command = "npx"

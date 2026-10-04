@@ -2,14 +2,11 @@
   "mcpServers": {
     "postgres": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-postgres"],
-      "env": {
-        "PGHOST": "${PGHOST:-localhost}",
-        "PGPORT": "${PGPORT:-5433}",
-        "PGDATABASE": "${PGDATABASE:-exchange}",
-        "PGUSER": "${PGUSER:-exchange_readonly}",
-        "PGPASSWORD": "${PGPASSWORD}"
-      }
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "postgresql://exchange_readonly:${env:PGPASSWORD}@localhost:5433/exchange"
+      ]
     },
     "context7": {
       "command": "npx",

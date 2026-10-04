@@ -563,15 +563,46 @@ refused» при вполне рабочей схеме. Один контейн
 
 ### MCP
 
-Подключены два сервера, конфигурация лежит в репозитории: `.mcp.json` (Claude Code), `.cursor/mcp.json`
-и `.codex/config.toml` — протокол MCP единый, различается только файл. Секреты не закоммичены:
-значения берутся из переменных окружения.
+Подключены два сервера, конфигурация лежит в репозитории: `.mcp.json` (Claude Code),
+`.cursor/mcp.json` и `.codex/config.toml` — протокол MCP единый, различается только файл и способ
+чтения пароля.
 
 MCP-сервер подключается не от пользователя сервиса, а от `exchange_readonly` с правами только на
-чтение: агент может смотреть схему и данные, но не может их изменить. Пользователя создаёт
-`ops/postgres-init/01-readonly-user.sh` при первом запуске `docker compose up`, пароль приходит из
-`EXCHANGE_READONLY_PASSWORD`. Скрипт выполняется один раз на пустом томе, поэтому после удаления
-тома `docker compose down -v` его нужно задать заново — иначе compose не поднимется.
+чтение: агент может смотреть схему и данные, но не может их изменить — `INSERT` в `expense_limit`
+отклоняется PostgreSQL с `permission denied`. Пользователя создаёт
+`ops/postgres-init/01-readonly-user.sh` при первом запуске `docker compose up` на пустом томе, пароль
+приходит из `EXCHANGE_READONLY_PASSWORD`. Скрипт выполняется один раз, поэтому после
+`docker compose down -v` том пуст и пользователя нужно создать заново, задав
+`EXCHANGE_READONLY_PASSWORD` (и то же значение в `PGPASSWORD`).
+
+**Что нужно, чтобы сервер подключился.** Локальная БД из `docker compose` доступна на порту `5433`.
+Пароль лежит в `.env` и в репозиторий не попадает, поэтому перед запуском инструмента переменные
+нужно экспортировать в сессию:
+
+```bash
+set -a && source .env && set +a
+```
+
+Пароль попадает в URL подключения, а URL передаётся **аргументом командной строки**: сервер
+`@modelcontextprotocol/server-postgres` не читает `PGHOST`/`PGUSER`/`PGPASSWORD` из окружения и без
+URL завершается с `Please provide a database URL as a command-line argument`. Поэтому три конфига
+читают пароль по-разному — это особенности инструментов, а не стилистика:
+
+| Инструмент | Файл | Как собирается URL |
+| --- | --- | --- |
+| Claude Code | `.mcp.json` | `${PGPASSWORD}` подставляется в `args` из окружения процесса |
+| Cursor | `.cursor/mcp.json` | `${env:PGPASSWORD}` — синтаксис подстановки Cursor (он не понимает `${VAR:-default}`) |
+| Codex | `.codex/config.toml` | `sh -c` собирает URL из переменных, которые Codex пересылает по имени через `env_vars`: подстановки `${VAR}` в `args` он не делает |
+
+Пароль попадает в URL, поэтому в `PGPASSWORD` годится только значение, безопасное для URL: без
+`@`, `:`, `/`, `?` и `#` (в `.env` для локального запуска — `readonly-local`).
+
+Проверяется без агента — обычным `psql` внутри контейнера:
+
+```bash
+docker compose exec -e PGPASSWORD=readonly-local -T postgres \
+  psql -h 127.0.0.1 -U exchange_readonly -d exchange -c "SELECT count(*) FROM expense_transaction;"
+```
 
 | Сервер | Зачем |
 | --- | --- |
