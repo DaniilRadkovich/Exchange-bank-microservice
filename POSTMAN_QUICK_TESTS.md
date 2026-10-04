@@ -138,7 +138,36 @@ Content-Type: application/json
 {"account_from":"{{accountFrom}}","account_to":"{{accountTo}}","currency_shortname":"USD","sum":100.00,"expense_category":"food","datetime":"2022-01-01T10:00:00Z"}
 ```
 
-## 5) Ошибки протокола
+## 5) Ручной досчёт операции
+
+Служебный сценарий для транзакции, которая не рассчиталась автоматически (курс не пришёл, попытки
+исчерпаны, статус `FAILED`).
+
+```http
+POST {{baseUrl}}/api/v1/transactions
+Content-Type: application/json
+
+{
+  "account_from": "{{accountFrom}}",
+  "account_to": "{{accountTo}}",
+  "currency_shortname": "KZT",
+  "sum": 10000.00,
+  "expense_category": "product",
+  "datetime": "2022-01-10T10:00:00Z"
+}
+```
+
+Возьмите `transaction_id` из ответа и повторите запрос, пока не получите `status: FAILED`.
+
+```http
+POST {{baseUrl}}/api/v1/transactions/{{transactionId}}/settle
+```
+
+Ожидаем: `200` с `status: RATE_RESOLVED` и посчитанным `limit_exceeded`, либо `202` с
+`status: PENDING`, если курс всё ещё недоступен (попытка потрачена). Для несуществующей операции —
+`404`.
+
+## 6) Ошибки протокола
 
 ```http
 GET {{baseUrl}}/api/v1/limits/exceeded
