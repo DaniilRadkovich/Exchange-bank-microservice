@@ -1,7 +1,5 @@
 package com.idftech.exchangeservice.infra.persistence;
 
-import com.idftech.exchangeservice.domain.BudgetPeriod;
-import com.idftech.exchangeservice.domain.ExchangeRate;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;

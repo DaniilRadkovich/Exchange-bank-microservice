@@ -80,6 +80,13 @@ public class AlphaVantageRateProvider implements ExchangeRateProvider {
 - Прерывание потока — не отказ провайдера: `RetryingCaller` бросает `RateCallCancelledException`, и
   его нельзя ловить вместе с сетевыми ошибками, иначе остановка сервиса снова станет «курсом
   недоступен» с засчитанной попыткой.
+- **Проверяй, какие пары есть у провайдера, а не какие хочется.** Twelve Data котирует тенге только
+  как `USD/KZT`: прямой `KZT/USD` возвращает 404 `symbol is missing or invalid`, и префикс `FX:` его
+  не спасает (404 и на `FX:KZT/USD`, и на `CURRENCY:KZT/USD`). Список пар — `GET /forex_pairs`.
+  Если прямой пары нет, бери обратную и обращай курс: `BigDecimal.ONE.divide(rate, RATE_SCALE,
+  HALF_UP)`. Округление по умолчанию здесь не годится — тенге (≈0.0022) превратились бы в `0.00`,
+  и сумма в USD молча уехала бы в ноль при формально «успешном» расчёте. Регрессия:
+  `ExchangeRateIntegrationTest#currencyWithoutDirectUsdPairIsResolvedThroughInversePair`.
 
 ## Шаг 3. Регистрация бина
 

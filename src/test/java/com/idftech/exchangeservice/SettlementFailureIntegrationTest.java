@@ -16,8 +16,10 @@ import com.idftech.exchangeservice.domain.ExpenseTransaction;
 import com.idftech.exchangeservice.domain.TransactionStatus;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
@@ -222,6 +224,55 @@ class SettlementFailureIntegrationTest extends AbstractIntegrationTest {
     // каждый перезапуск сервиса в массовый перевод транзакций в FAILED.
     assertThat(attemptsInDatabase(pending.id())).isZero();
     assertThat(statusInDatabase(pending.id())).isEqualTo(TransactionStatus.PENDING.name());
+  }
+
+  @Test
+  @DisplayName("Два конкурирующих взятия пачки не получают одних и тех же транзакций")
+  void concurrentClaimsDoNotOverlap() throws Exception {
+    // Пачка больше одной транзакции: иначе второму взятию нечего было бы брать, и проверка
+    // прошла бы на пустом пересечении.
+    for (int i = 0; i < 10; i++) {
+      accept("50.00");
+    }
+    CyclicBarrier startTogether = new CyclicBarrier(2);
+
+    try (var workers = Executors.newVirtualThreadPerTaskExecutor()) {
+      Future<List<ExpenseTransaction>> first =
+          workers.submit(
+              () -> {
+                startTogether.await();
+                return intakeService.claimPending(100);
+              });
+      Future<List<ExpenseTransaction>> second =
+          workers.submit(
+              () -> {
+                startTogether.await();
+                return intakeService.claimPending(100);
+              });
+
+      List<ExpenseTransaction> firstBatch = first.get(30, TimeUnit.SECONDS);
+      List<ExpenseTransaction> secondBatch = second.get(30, TimeUnit.SECONDS);
+
+      // FOR UPDATE SKIP LOCKED не даёт двум задачам взять одну строку: иначе счётчик попыток рос
+      // вдвое быстрее, а внешний API получал двойные платные вызовы.
+      Set<UUID> claimedIds = new HashSet<>();
+      firstBatch.forEach(transaction -> assertThat(claimedIds.add(transaction.id())).isTrue());
+      secondBatch.forEach(transaction -> assertThat(claimedIds.add(transaction.id())).isTrue());
+      assertThat(claimedIds).hasSize(firstBatch.size() + secondBatch.size());
+    }
+  }
+
+  @Test
+  @DisplayName("Взятие пачки засчитывает попытку сразу, а не по исходу расчёта")
+  void claimCountsAttemptAtOnce() {
+    ExpenseTransaction pending = accept("50.00");
+
+    List<ExpenseTransaction> claimed = intakeService.claimPending(100);
+
+    assertThat(claimed).hasSize(1);
+    // Попытка засчитана при взятии: сбой между взятием и расчётом не оставит транзакцию с
+    // незасчитанной попыткой, иначе findPending возвращал бы её по кругу.
+    assertThat(attemptsInDatabase(pending.id())).isEqualTo(1);
   }
 
   private ExpenseTransaction accept(String sum) {

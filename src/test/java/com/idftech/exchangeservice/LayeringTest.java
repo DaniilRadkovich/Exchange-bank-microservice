@@ -51,10 +51,12 @@ class LayeringTest {
   @Test
   @DisplayName("Прикладной слой не знает ни про HTTP, ни про JPA")
   void applicationDoesNotDependOnTransportOrPersistence() throws IOException {
+    // jakarta.validation здесь допустим: точность суммы и формат id проверяются на границе
+    // Bean Validation (@Digits, @Pattern). Запрещены только JPA (jakarta.persistence) и HTTP.
     assertThat(importsIn("application"))
         .noneMatch(
             name ->
-                name.startsWith("jakarta.")
+                name.startsWith("jakarta.persistence")
                     || name.startsWith("org.springframework.web")
                     || name.startsWith("com.idftech.exchangeservice.infra.persistence"));
   }

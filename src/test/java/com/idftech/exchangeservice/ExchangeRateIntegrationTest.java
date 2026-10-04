@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 
+import com.github.tomakehurst.wiremock.client.WireMock;
 import com.idftech.exchangeservice.application.ExchangeRateService;
 import com.idftech.exchangeservice.application.LimitCommandService;
 import com.idftech.exchangeservice.application.TransactionIntakeService;
@@ -462,6 +463,67 @@ class ExchangeRateIntegrationTest extends AbstractIntegrationTest {
 
     assertThat(jdbcTemplate.queryForObject(
         "SELECT COUNT(*) FROM exchange_rate WHERE base_currency = 'KZT'", Integer.class)).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("Валюта без прямой пары к USD считается по обратной паре")
+  void currencyWithoutDirectUsdPairIsResolvedThroughInversePair() {
+    // Twelve Data котирует тенге только как USD/KZT: прямой KZT/USD провайдер отвергает с 404
+    // «symbol is missing or invalid». Без обратной пары операция в тенге оставалась бы в PENDING
+    // до FAILED, хотя курс у провайдера есть — просто в обратном направлении.
+    stubPairNotFound("KZT/USD");
+    stubPair("USD/KZT", "448.44374");
+
+    ExpenseTransaction settled =
+        settle(
+            intakeService.accept(
+                nextId(),
+                ACCOUNT,
+                "0000009999",
+                "KZT",
+                new BigDecimal("10000.00"),
+                ExpenseCategory.PRODUCT,
+                utc("2022-01-10")));
+
+    assertThat(settled.status()).isEqualTo(TransactionStatus.RATE_RESOLVED);
+    // 1/448.44374 = 0.0022299341. Обратный курс обязан сохранить значащие цифры: округление по
+    // умолчанию оставило бы 0.00, и транзакция молча уехала бы в ноль.
+    assertThat(settled.usdRate()).isEqualByComparingTo("0.0022299341");
+    assertThat(settled.amountUsd()).isEqualByComparingTo("22.30");
+  }
+
+  /** Заглушка пары, которой у провайдера нет: Twelve Data отвечает 404 с текстом ошибки. */
+  private void stubPairNotFound(String symbol) {
+    rateApi()
+        .stubFor(
+            WireMock.get(WireMock.urlPathEqualTo("/time_series"))
+                .withQueryParam("symbol", WireMock.equalTo(symbol))
+                .willReturn(
+                    WireMock.notFound()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(
+                            """
+                            {"code":404,"message":"**symbol** or **figi** parameter is missing or"
+                            + " invalid","status":"error"}
+                            """)));
+  }
+
+  /** Заглушка пары, у которой есть котировка на дату операции. */
+  private void stubPair(String symbol, String close) {
+    rateApi()
+        .stubFor(
+            WireMock.get(WireMock.urlPathEqualTo("/time_series"))
+                .withQueryParam("symbol", WireMock.equalTo(symbol))
+                .willReturn(
+                    WireMock.okJson(
+                        """
+                        {
+                          "meta": {"symbol": "%s", "interval": "1day", "currency": "USD"},
+                          "values": [{"datetime": "%s", "close": "%s"}],
+                          "status": "ok"
+                        }
+                        """
+                            .formatted(symbol, serviceDate().toLocalDate(), close))));
   }
 
   private ExchangeRate rate(String isoDate, BigDecimal close, BigDecimal previousClose) {

@@ -65,6 +65,36 @@ public class JpaTransactionStore implements TransactionStore {
         AND status <> :resolved
       """;
 
+  /**
+   * Снимает попытку, засчитанную при взятии транзакции в дорасчёт.
+   *
+   * <p>Отмена дорасчёта — не неудача, поэтому попытка не должна оставаться в счётчике. Условие
+   * {@code settlement_attempts > 0} не даёт уйти в отрицательное значение, если сработают два
+   * прерванных прохода подряд.
+   */
+  private static final String RELEASE_CLAIM = """
+      UPDATE expense_transaction
+      SET settlement_attempts = settlement_attempts - 1
+      WHERE id = :id
+        AND status = 'PENDING'
+        AND settlement_attempts > 0
+      """;
+
+  /**
+   * Переводит в {@code FAILED} транзакцию, у которой исчерпаны попытки.
+   *
+   * <p>Условие {@code status = 'PENDING'} обязательно: рассчитанная транзакция попытками больше не нужна,
+   * а перевод её в {@code FAILED} при заполненных курсе и сумме нарушил бы
+   * {@code ck_expense_tx_resolved_consistent}.
+   */
+  private static final String MARK_FAILED = """
+      UPDATE expense_transaction
+      SET status = :failed
+      WHERE id = :id
+        AND status = 'PENDING'
+        AND settlement_attempts >= :maxAttempts
+      """;
+
   private static final String INSERT_IF_ABSENT = """
       INSERT INTO expense_transaction (
           id, account_from, account_to, currency_code, amount, expense_category,
@@ -185,6 +215,47 @@ public class JpaTransactionStore implements TransactionStore {
     return repository.findPending(maxAttempts, PageRequest.of(0, batchSize)).stream()
         .map(this::toDomain)
         .toList();
+  }
+
+  /**
+   * Берёт пачку в дорасчёт одной транзакцией: блокирует строки и засчитывает им попытку.
+   *
+   * <p>Блокировка и инкремент обязаны идти в одной транзакции: между ними другая задача увидела бы те же
+   * строки без блокировки и взяла их второй раз. После фиксации блокировки снимаются, поэтому взятые
+   * транзакции перечитываются заново — за время между фиксацией и чтением их мог посчитать кто-то
+   * другой, и расчёт обязан увидеть уже рассчитанную строку.
+   */
+  @Override
+  @Transactional
+  public List<ExpenseTransaction> claimPending(int maxAttempts, int batchSize) {
+    List<UUID> ids = repository.lockPendingIds(maxAttempts, batchSize);
+    if (ids.isEmpty()) {
+      return List.of();
+    }
+    repository.incrementAttempts(ids);
+    // Контекст персистентности держит сущности со старым счётчиком после пакетного UPDATE.
+    entityManager.clear();
+    return repository.findAllById(ids).stream().map(this::toDomain).toList();
+  }
+
+  @Override
+  @Transactional
+  public void releaseClaim(UUID id) {
+    entityManager
+        .createNativeQuery(RELEASE_CLAIM)
+        .setParameter("id", id)
+        .executeUpdate();
+  }
+
+  @Override
+  @Transactional
+  public void markFailedIfExhausted(UUID id, int maxAttempts) {
+    entityManager
+        .createNativeQuery(MARK_FAILED)
+        .setParameter("id", id)
+        .setParameter("maxAttempts", maxAttempts)
+        .setParameter("failed", TransactionStatus.FAILED.name())
+        .executeUpdate();
   }
 
   /**

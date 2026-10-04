@@ -1,5 +1,7 @@
 package com.idftech.exchangeservice.application.config;
 
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
@@ -13,6 +15,11 @@ import org.springframework.validation.annotation.Validated;
  *
  * <p>Помимо HTTP-клиента здесь настройка политики кэша: {@code maxFallbackAge} ограничивает, насколько
  * старым может быть курс, взятый из базы как резерв.
+ *
+ * <p>Ключ и адрес проверяются на старте, а не на первом запросе: пустой ключ иначе позволял бы
+ * подняться «здоровому» сервису, который каждую FX-операцию отправлял бы в {@code FAILED}, а в логе
+ * виноватым выглядел бы провайдер. Без схемы в адресе {@code RestClient} падал бы на первом же
+ * запросе с невнятным исключением вместо понятной ошибки конфигурации.
  *
  * @param provider идентификатор провайдера, используется для выбора адаптера
  * @param baseUrl базовый URL внешнего API
@@ -30,7 +37,9 @@ import org.springframework.validation.annotation.Validated;
 @ConfigurationProperties(prefix = "exchange.rates")
 public record RateProviderProperties(
     String provider,
+    @Pattern(regexp = "^https?://.+", message = "must start with http:// or https://")
     String baseUrl,
+    @NotBlank(message = "must not be empty: set RATES_API_KEY")
     String apiKey,
     Duration connectTimeout,
     Duration readTimeout,

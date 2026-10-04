@@ -226,6 +226,19 @@ public class TransactionIntakeService {
   }
 
   /**
+   * Берёт пачку в дорасчёт: блокирует строки и засчитывает им попытку одной транзакцией.
+   *
+   * <p>Отдельный метод, а не {@code findPending}, потому что взятие пачки обязано быть атомарным:
+   * обычный {@code SELECT} позволял двум задачам взять одни и те же строки. Здесь же попытка
+   * засчитывается сразу — сбой между взятием и расчётом не оставит транзакцию с незасчитанной
+   * попыткой.
+   */
+  @Transactional
+  public List<ExpenseTransaction> claimPending(int batchSize) {
+    return transactionStore.claimPending(settlementProperties.maxAttempts(), batchSize);
+  }
+
+  /**
    * Досчитывает пачку транзакций в две фазы (ТЗ п.1*).
    *
    * <p>Сначала параллельно на виртуальных потоках собираются курсы, затем каждый расчёт
@@ -236,11 +249,15 @@ public class TransactionIntakeService {
    * очередь на {@code spend_period_lock}. Это не потеря параллелизма, а требование корректности:
    * накопленная сумма общая для периода.
    *
+   * <p>Пачка берётся через {@link #claimPending(int)}: строки блокируются и засчитываются одной
+   * транзакцией, поэтому две реплики сервиса (или два прохода планировщика) не разбирают одну
+   * пачку дважды.
+   *
    * @param batchSize максимальный размер пачки
    * @return число транзакций, взятых в обработку
    */
   public int settlePending(int batchSize) {
-    List<ExpenseTransaction> pending = findPending(batchSize);
+    List<ExpenseTransaction> pending = claimPending(batchSize);
     if (pending.isEmpty()) {
       return 0;
     }
@@ -262,10 +279,15 @@ public class TransactionIntakeService {
   /**
    * Применяет полученный курс, разбирая три исхода его получения.
    *
-   * <p>Разбирать исходы по отдельности обязательно: «курса нет» — это ожидание следующего прохода
-   * планировщика, а сбой нашей БД требует внимания и не должен выглядеть как недоступность биржи.
-   * Транзакции в пачке не зависят, поэтому и сбой расчёта, и неожиданная ошибка разбора исходов
-   * гасятся на одну задачу: остальные транзакции обязаны быть рассчитаны.
+   * <p>Попытка уже засчитана при взятии пачки ({@link #claimPending(int)}), поэтому здесь она не
+   * засчитывается повторно: двойной счёт привёл бы к тому, что транзакция достигает {@code FAILED}
+   * вдвое быстрее. Разбирать исходы по отдельности обязательно: «курса нет» — это ожидание следующего
+   * прохода планировщика, а сбой нашей БД требует внимания и не должен выглядеть как недоступность
+   * биржи. Транзакции в пачке не зависят, поэтому и сбой расчёта, и неожиданная ошибка разбора
+   * исходов гасятся на одну задачу: остальные транзакции обязаны быть рассчитаны.
+   *
+   * <p>После обработки транзакция переводится в {@code FAILED}, если попытки исчерпаны и она всё ещё
+   * не рассчитана. Рассчитанная не переводится: у неё уже есть курс и сумма.
    */
   private void applySettlement(
       ExpenseTransaction transaction, RateResolution resolution) {
@@ -273,13 +295,30 @@ public class TransactionIntakeService {
       switch (resolution) {
         case RateResolution.Resolved resolved ->
             settlementApplier.apply(transaction.id(), resolved.rate());
-        case RateResolution.Unavailable ignored -> registerUnavailableRate(transaction);
+        case RateResolution.Unavailable ignored ->
+            log.warn(
+                "Rate unavailable for transaction {} ({} on {}); attempt counted at claim, keeping"
+                    + " PENDING for a later attempt",
+                transaction.id(),
+                transaction.currency().getCurrencyCode(),
+                transaction.occurredAt());
         case RateResolution.Failed failed ->
-            registerFailedAttempt(transaction.id(), failed.cause());
+            log.error(
+                "Settlement of transaction {} failed: {}",
+                transaction.id(),
+                failed.cause().toString(),
+                failed.cause());
       }
+    } catch (RateCallCancelledException e) {
+      // Отмена, а не неудача: попытка засчитана при взятии, и её надо снять, иначе при
+      // max-attempts: 1 остановка сервиса переводила бы транзакции в FAILED.
+      log.info("Settlement of transaction {} cancelled; attempt not counted", transaction.id());
+      settlementApplier.releaseClaim(transaction.id());
+      return;
     } catch (RuntimeException e) {
-      registerFailedAttempt(transaction.id(), e);
+      log.error("Settlement of transaction {} failed: {}", transaction.id(), e.toString(), e);
     }
+    settlementApplier.markFailedIfExhausted(transaction.id());
   }
 
   /**

@@ -18,7 +18,7 @@
 Нужен JDK 21. На macOS `JAVA_HOME=$(/usr/libexec/java_home -v 21)`. Нужен Docker для тестов.
 
 ```bash
-./mvnw test                                   # 141 тест, unit + интеграционные
+./mvnw test                                   # 157 тестов, unit + интеграционные
 ./mvnw test -Dtest=LimitCalculatorTest         # один набор
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
 ```
@@ -190,6 +190,15 @@
     `UPDATE` не трогает уже рассчитанную транзакцию (`status <> 'RATE_RESOLVED'`): перевод обратно в
     `FAILED` при заполненных курсе и сумме нарушил бы `ck_expense_tx_resolved_consistent`. Регрессия:
     `SettlementFailureIntegrationTest#concurrentAttemptsAreAllCounted`.
+    Взятие пачки тоже конкурентно: `TransactionStore.claimPending` берёт строки `SELECT ... FOR UPDATE
+    SKIP LOCKED` и засчитывает им попытку в той же транзакции. Без этого две реплики сервиса (или два
+    прохода планировщика) разбирали одну пачку дважды: счётчик попыток рос вдвое быстрее, транзакции
+    достигали `FAILED` раньше срока, а внешний API получал двойные платные вызовы. Попытка
+    засчитывается при взятии, а не по исходу расчёта: сбой между взятием и расчётом не оставит
+    транзакцию с незасчитанной попыткой. Отменённый дорасчёт попытку не засчитывает — счётчик
+    снимается отдельным `UPDATE` (`TransactionStore.releaseClaim`), иначе при `max-attempts: 1`
+    остановка сервиса переводила бы транзакции в `FAILED`. Регрессии:
+    `SettlementFailureIntegrationTest#concurrentClaimsDoNotOverlap`, `#claimCountsAttemptAtOnce`.
 16. **Ошибки протокола — ProblemDetail.** `ProblemDetailExceptionHandler` объявлен с
     `HIGHEST_PRECEDENCE` и перехватывает `Exception`, из-за чего обходит
     `DefaultHandlerExceptionResolver`: без явных `handle*`-методов 400/404/405/406/415 от Spring MVC
@@ -213,7 +222,9 @@
     при `max-attempts: 1` один перезапуск переводил нормальные транзакции в `FAILED`. Следствие для
     обработчика: `registerFailedAttempt` проверяет отмену сам, повторно проверять её в вызывающем
     коде не надо, а лог отмены — `INFO`, не `ERROR`: никто не должен срочно чинить то, что
-    остановили намеренно. Регрессии:
+    остановили намеренно. В пакетном пути отмена не только не засчитывается, но и снимает попытку,
+    уже засчитанную при взятии пачки (п.15): без этого прерванный поток оставлял бы «засчитанную»
+    попытку, и тот же перезапуск переводил бы транзакции в `FAILED`. Регрессии:
     `SettlementFailureIntegrationTest#cancelledSettlementKeepsAttemptUncounted`,
     `RetryingCallerTest`.
 18. **Одиночный дорасчёт считает попытку на всех исходах, а не только на последнем шаге.** Правило 17

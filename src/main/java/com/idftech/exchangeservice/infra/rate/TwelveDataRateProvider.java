@@ -7,6 +7,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.Currency;
@@ -68,17 +69,37 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
 
   @Override
   public Optional<ExchangeRate> fetchDailyRate(String baseCurrency, LocalDate date) {
+    Optional<ExchangeRate> direct = rateFor(baseCurrency + "/" + USD, baseCurrency, date);
+    if (direct.isPresent()) {
+      missCounter.increment();
+      return direct;
+    }
+    // Обратная пара. Не все валюты котируются к USD напрямую: тенге, например, у Twelve Data есть
+    // только как USD/KZT, а KZT/USD даёт 404 «symbol is missing or invalid». Брать курс из обратной
+    // пары и обращать его — значит не терять операции из-за того, как провайдер нарезал символы.
+    Optional<ExchangeRate> inverted = invertedRate(baseCurrency, date);
+    if (inverted.isPresent()) {
+      missCounter.increment();
+      return inverted;
+    }
+    failureCounter.increment();
+    return Optional.empty();
+  }
+
+  /**
+   * Курс пары {@code symbol} за дату операции; пустой результат означает, что провайдер не дал
+   * пригодного значения.
+   */
+  private Optional<ExchangeRate> rateFor(String symbol, String baseCurrency, LocalDate date) {
     LocalDate start = date.minusDays(HISTORY_DAYS);
-    TimeSeriesResponse response = requestTimer.record(
-        () -> retryingCaller.call(
-            () -> request(baseCurrency, start, date), properties.maxRetries(), "TwelveData"));
+    TimeSeriesResponse response =
+        requestTimer.record(
+            () -> retryingCaller.call(() -> request(symbol, start, date), properties.maxRetries(), "TwelveData"));
 
     if (response == null) {
-      failureCounter.increment();
       return Optional.empty();
     }
     if (response.status() != null && !"ok".equalsIgnoreCase(response.status())) {
-      failureCounter.increment();
       log.warn(
           "External rate provider returned status={} code={} message={}",
           response.status(),
@@ -86,22 +107,56 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
           response.message());
       return Optional.empty();
     }
-    Optional<ExchangeRate> rate = toExchangeRate(baseCurrency, date, response);
-    if (rate.isPresent()) {
-      missCounter.increment();
-    } else {
-      failureCounter.increment();
-    }
-    return rate;
+    return toExchangeRate(baseCurrency, date, response);
   }
 
-  private TimeSeriesResponse request(String baseCurrency, LocalDate start, LocalDate end) {
+  /**
+   * Курс {@code USD/BASE}, обращённый в {@code BASE/USD}.
+   *
+   * <p>Точность не теряется: {@code RATE_SCALE} десятичных знаков достаточно, чтобы обратный курс
+   * тенге (около 0.0022) сохранил все значащие цифры, а округление по умолчанию здесь не годится —
+   * {@link ExchangeRate#applicableRate()} требует {@code RATE_SCALE}.
+   */
+  private Optional<ExchangeRate> invertedRate(String baseCurrency, LocalDate date) {
+    // toExchangeRate гарантирует, что хотя бы одно из значений пригодно, поэтому applicableRate()
+    // здесь не бросает: нулевой курс от провайдера отсекается ещё в positive().
+    Optional<ExchangeRate> inverse = rateFor(USD + "/" + baseCurrency, baseCurrency, date);
+    if (inverse.isEmpty()) {
+      return Optional.empty();
+    }
+    ExchangeRate rate = inverse.get();
+    log.debug(
+        "Direct pair {}/{} unavailable for {}; using inverted {}/{} close {}",
+        baseCurrency,
+        USD,
+        date,
+        USD,
+        baseCurrency,
+        rate.applicableRate());
+    return Optional.of(
+        new ExchangeRate(
+            UUID.randomUUID(),
+            Currency.getInstance(baseCurrency),
+            Currency.getInstance(USD),
+            rate.rateDate(),
+            inverted(rate.close()),
+            inverted(rate.previousClose())));
+  }
+
+  /** Обратная величина пригодного курса; {@code null} остаётся {@code null}, ноль и минус не делятся. */
+  private static BigDecimal inverted(BigDecimal rate) {
+    return rate == null || rate.signum() <= 0
+        ? null
+        : BigDecimal.ONE.divide(rate, ExchangeRate.RATE_SCALE, RoundingMode.HALF_UP);
+  }
+
+  private TimeSeriesResponse request(String symbol, LocalDate start, LocalDate end) {
     return restClient
         .get()
         .uri(
             uriBuilder -> uriBuilder
                 .path("/time_series")
-                .queryParam("symbol", baseCurrency + "/" + USD)
+                .queryParam("symbol", symbol)
                 .queryParam("interval", "1day")
                 .queryParam("start_date", start.toString())
                 .queryParam("end_date", end.toString())

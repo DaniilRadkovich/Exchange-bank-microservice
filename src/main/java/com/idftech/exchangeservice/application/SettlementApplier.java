@@ -105,6 +105,29 @@ public class SettlementApplier {
   }
 
   /**
+   * Снимает попытку, засчитанную при взятии транзакции в дорасчёт.
+   *
+   * <p>Отмена дорасчёта — не неудача: прерванный поток попытку не засчитывает (правило 17), но
+   * claim уже успел её засчитать. Без снятия при {@code max-attempts: 1} один перезапуск сервиса
+   * переводил бы в {@code FAILED} транзакции, которые никто не считал неудачными.
+   */
+  @Transactional
+  public void releaseClaim(UUID transactionId) {
+    transactionStore.releaseClaim(transactionId);
+  }
+
+  /**
+   * Переводит транзакцию в {@code FAILED}, если попытки исчерпаны и она всё ещё не рассчитана.
+   *
+   * <p>Вызывается после обработки взятой транзакции. Рассчитанная не переводится: перевод при
+   * заполненных курсе и сумме нарушил бы {@code ck_expense_tx_resolved_consistent}.
+   */
+  @Transactional
+  public void markFailedIfExhausted(UUID transactionId) {
+    transactionStore.markFailedIfExhausted(transactionId, maxAttempts);
+  }
+
+  /**
    * Приводит флаги всех уже разрешённых операций периода в соответствие с текущими лимитами.
    *
    * <p>Вызывается при установке нового лимита. Новый лимит меняет порог для части операций месяца, а

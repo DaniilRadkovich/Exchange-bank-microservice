@@ -52,7 +52,7 @@ exchange:
     # Внешний провайдер дневных курсов; конкретный API выбирается в README.
     provider: twelvedata
     base-url: ${RATES_API_BASE_URL:https://api.twelvedata.com}
-    api-key: ${RATES_API_KEY:}
+    api-key: ${RATES_API_KEY:8747cbabfe5241e989c82c68104f784e}
     connect-timeout: 2s
     read-timeout: 3s
     # Насколько старым может быть резервный курс, если в БД нет закрытия на дату операции.
