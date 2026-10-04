@@ -55,14 +55,19 @@ public record ExpenseTransaction(
     return status == TransactionStatus.RATE_RESOLVED && amountUsd != null;
   }
 
-  /**
+/**
    * Копия транзакции с применённым курсом и рассчитанным флагом превышения лимита.
    *
-   * <p>Точность курса берётся из {@link ExchangeRate#RATE_SCALE}: собственный константы здесь нет,
-   * иначе два числа разъехались бы, а расхождение не показал бы ни один тест — округлённый до
-   * меньшей точности курс выглядит правдоподобно.
+   * <p>Сумма в USD считается по <b>сохранённому</b> курсу, то есть по тому, что реально попадёт в
+   * строку {@code usd_rate}. Иначе сумма и курс описывали бы разные цены: расхождение показывалось бы
+   * только в пересчёте суммы, и найти его можно было бы исключительно сверкой с хранилищем.
+   *
+   * <p>Точность курса берётся из {@link ExchangeRate#RATE_SCALE}: собственной константы здесь нет,
+   * иначе два числа разъехались бы, а расхождение не показал бы ни один тест — округлённый до меньшей
+   * точности курс выглядит правдоподобно.
    */
   public ExpenseTransaction resolved(BigDecimal rate, boolean exceeded) {
+    BigDecimal storedRate = rate.setScale(ExchangeRate.RATE_SCALE, RoundingMode.HALF_UP);
     return new ExpenseTransaction(
         id,
         accountFrom,
@@ -71,8 +76,8 @@ public record ExpenseTransaction(
         amount,
         category,
         occurredAt,
-        rate.setScale(ExchangeRate.RATE_SCALE, RoundingMode.HALF_UP),
-        toUsd(amount, rate),
+        storedRate,
+        toUsd(amount, storedRate),
         TransactionStatus.RATE_RESOLVED,
         exceeded);
   }
@@ -82,13 +87,6 @@ public record ExpenseTransaction(
     return new ExpenseTransaction(
         id, accountFrom, accountTo, currency, amount, category, occurredAt,
         usdRate, amountUsd, TransactionStatus.RATE_RESOLVED, exceeded);
-  }
-
-  /** Копия в статусе FAILED: внешний API курсов недоступен, сумма в USD неизвестна. */
-  public ExpenseTransaction failed() {
-    return new ExpenseTransaction(
-        id, accountFrom, accountTo, currency, amount, category, occurredAt,
-        null, null, TransactionStatus.FAILED, null);
   }
 
   /** Сумма операции в USD по биржевому курсу: amount × rate с округлением до копеек. */

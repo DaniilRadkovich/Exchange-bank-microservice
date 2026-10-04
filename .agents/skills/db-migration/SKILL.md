@@ -26,10 +26,11 @@ description: Создать или изменить миграцию базы д
 ```sql
 --liquibase formatted sql
 
---changeset exchange:002-settlement-index
+--changeset exchange:005-settlement-index
 -- Индекс под findResolvedInPeriod: выборка периода всегда идёт по счёту, категории и времени.
-CREATE INDEX ix_expense_transaction_period
-  ON expense_transaction (account_from, expense_category, occurred_at);
+-- Имя индекса — по фактическим именам: сейчас это ix_expense_tx_period.
+CREATE INDEX ix_expense_tx_pending_attempts
+  ON expense_transaction (settlement_attempts) WHERE status = 'PENDING';
 ```
 
 Идентификатор `--changeset` должен быть уникален навсегда: Liquibase определяет «уже применён»
@@ -44,7 +45,7 @@ CREATE INDEX ix_expense_transaction_period
 | Таблица | Ключевые ограничения |
 | --- | --- |
 | `expense_transaction` | `currency_code CHAR(3)`, `expense_category VARCHAR(16)`, CHECK на категорию |
-| `expense_limit` | те же ограничения на категорию, `uc_expense_limit_instant` — один лимит на момент |
+| `expense_limit` | те же ограничения на категорию; `uc_expense_limit_instant` (миграция `002`) — один лимит на момент |
 | `exchange_rate` | уникальность `(base_currency, quote_currency, rate_date)` |
 | `spend_period_lock` | первичный ключ `(account_from, expense_category, budget_period)` |
 
@@ -69,9 +70,14 @@ CREATE INDEX ix_expense_transaction_period
   `sum` проверяет `@Digits(integer = 17)`, то есть формат, а не смысл. Ширины согласованы:
   `amount < 10^17`, `usd_rate < 10^9` (курс обязан пройти запись в `exchange_rate`), произведение
   `< 10^26`, а `NUMERIC(30, 2)` вмещает `< 10^28`.
-- **Внешние ключи и индексы обязательны.** Индексы нужны на колонках, по которым идут выборки
+- **Индексы обязательны там, где идут выборки.** Индексы нужны на колонках, по которым читают
   `findResolvedInPeriod`, `findLatestNotAfter` и запросы п.6 (`findExceededTransactions`,
-  `findLimitsWithSpent`).
+  `findLimitsWithSpentAmount`). Новый индекс — только с комментарием, какой запрос он ускоряет:
+  индексы стоят на записи, а лишние съедают время вставки транзакций.
+  Внешних ключей в схеме сейчас нет и они не обязательны: таблицы полиномиально независимы
+  (`spend_period_lock` не ссылается на транзакции по построению). Если понадобится ссылочная
+  целостность, обсуди это отдельно: FK на `spend_period_lock` означал бы удаление строки-замка вместе
+  с лимитом, а блокировку пришлось бы тогда пересоздавать.
 - **Запись курсов идёт нативным `INSERT ... ON CONFLICT DO UPDATE`**, а не через `save()`: две
   параллельные задачи дорасчёта умеют записать один и тот же курс, и наивный `save()` на этом
   конфликте упал бы. Если меняешь `ExchangeRateJpaRepository.upsert`, сохраняй `COALESCE` в `SET`:

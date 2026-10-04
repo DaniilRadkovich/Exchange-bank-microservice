@@ -21,6 +21,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -79,7 +80,7 @@ public class ExpenseController {
         transactionId,
         request.accountFrom(),
         request.accountTo(),
-        request.currencyShortname().toUpperCase(java.util.Locale.ROOT),
+        request.currencyShortname().toUpperCase(Locale.ROOT),
         request.sum(),
         ExpenseCategory.fromCode(request.expenseCategory()),
         request.datetime());

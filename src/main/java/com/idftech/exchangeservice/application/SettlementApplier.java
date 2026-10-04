@@ -6,7 +6,6 @@ import com.idftech.exchangeservice.domain.BudgetPeriod;
 import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseLimit;
 import com.idftech.exchangeservice.domain.ExpenseTransaction;
-import com.idftech.exchangeservice.domain.TransactionStatus;
 import com.idftech.exchangeservice.application.config.SettlementProperties;
 import java.math.BigDecimal;
 import java.util.List;
@@ -160,21 +159,10 @@ public class SettlementApplier {
 
   private ExpenseTransaction settleWithRate(
       ExpenseTransaction transaction, BudgetPeriod period, BigDecimal rate) {
-    // Курс в USD применён, сумма известна — но ещё не записанная в БД. Для расчёта остатка
-    // используем её в памяти, чтобы не требовать лишней записи и повторного чтения.
-    ExpenseTransaction resolvedCandidate =
-        new ExpenseTransaction(
-            transaction.id(),
-            transaction.accountFrom(),
-            transaction.accountTo(),
-            transaction.currency(),
-            transaction.amount(),
-            transaction.category(),
-            transaction.occurredAt(),
-            rate,
-            ExpenseTransaction.toUsd(transaction.amount(), rate),
-            TransactionStatus.RATE_RESOLVED,
-            null);
+    // Курс применён, флаг ещё не рассчитан: сначала кандидат без флага, чтобы посчитать накопленную
+    // сумму периода вместе с ним. Сборку кандидата делает домен (ExpenseTransaction.resolved), иначе
+    // округление курса и произведение amount × rate жили бы в двух местах и разъехались бы.
+    ExpenseTransaction resolvedCandidate = transaction.resolved(rate, false);
 
     List<ExpenseTransaction> periodTransactions =
         withCandidate(

@@ -1,23 +1,30 @@
 package com.idftech.exchangeservice.application;
 
+import com.idftech.exchangeservice.application.config.SettlementProperties;
 import com.idftech.exchangeservice.application.exception.RateCallCancelledException;
 import com.idftech.exchangeservice.application.exception.UnprocessableEntityException;
 import com.idftech.exchangeservice.application.port.TransactionStore;
 import com.idftech.exchangeservice.domain.BudgetPeriod;
 import com.idftech.exchangeservice.domain.ExceededTransaction;
+import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseTransaction;
-import com.idftech.exchangeservice.application.config.SettlementProperties;
+import com.idftech.exchangeservice.domain.TransactionStatus;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Currency;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -73,8 +80,8 @@ public class TransactionIntakeService {
   private final ParallelRateResolver parallelRateResolver;
   private final SettlementProperties settlementProperties;
   private final Clock clock;
-  private final java.util.concurrent.Executor settlementExecutor;
-  private final org.springframework.context.ApplicationEventPublisher events;
+  private final Executor settlementExecutor;
+  private final ApplicationEventPublisher events;
 
   public TransactionIntakeService(
       TransactionStore transactionStore,
@@ -83,9 +90,8 @@ public class TransactionIntakeService {
       ParallelRateResolver parallelRateResolver,
       SettlementProperties settlementProperties,
       Clock clock,
-      @org.springframework.beans.factory.annotation.Qualifier("settlementExecutor")
-          java.util.concurrent.Executor settlementExecutor,
-      org.springframework.context.ApplicationEventPublisher events) {
+      @Qualifier("settlementExecutor") Executor settlementExecutor,
+      ApplicationEventPublisher events) {
     this.transactionStore = transactionStore;
     this.settlementApplier = settlementApplier;
     this.exchangeRateService = exchangeRateService;
@@ -120,8 +126,8 @@ public class TransactionIntakeService {
       String accountFrom,
       String accountTo,
       String currencyCode,
-      java.math.BigDecimal amount,
-      com.idftech.exchangeservice.domain.ExpenseCategory category,
+      BigDecimal amount,
+      ExpenseCategory category,
       OffsetDateTime occurredAt) {
 
     log.info(
@@ -142,7 +148,7 @@ public class TransactionIntakeService {
         occurredAt,
         null,
         null,
-        com.idftech.exchangeservice.domain.TransactionStatus.PENDING,
+        TransactionStatus.PENDING,
         null);
 
     ExpenseTransaction stored = transactionStore.saveIfAbsent(pending);
@@ -279,7 +285,7 @@ public class TransactionIntakeService {
     Map<UUID, RateResolution> rates =
         parallelRateResolver.resolveRates(pending, this::rateDate, settlementExecutor);
 
-    List<CompletableFuture<?>> settlements = new java.util.ArrayList<>(pending.size());
+    List<CompletableFuture<?>> settlements = new ArrayList<>(pending.size());
     for (ExpenseTransaction transaction : pending) {
       settlements.add(
           CompletableFuture.runAsync(
@@ -439,9 +445,9 @@ public class TransactionIntakeService {
    * а не ошибка формата, поэтому клиент получает {@code 422}, а не {@code 500} из
    * {@code IllegalArgumentException}.
    */
-  private static java.util.Currency currencyOf(String currencyCode) {
+  private static Currency currencyOf(String currencyCode) {
     try {
-      return java.util.Currency.getInstance(currencyCode);
+      return Currency.getInstance(currencyCode);
     } catch (IllegalArgumentException e) {
       throw new UnprocessableEntityException(
           "unknown_currency", "Неизвестный код валюты ISO 4217: " + currencyCode);

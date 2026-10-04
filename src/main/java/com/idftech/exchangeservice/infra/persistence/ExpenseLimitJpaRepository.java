@@ -28,15 +28,6 @@ public interface ExpenseLimitJpaRepository extends JpaRepository<ExpenseLimitEnt
       @Param("periodStart") Instant periodStart,
       @Param("periodEnd") Instant periodEnd);
 
-  /** Все лимиты счёта, новые первыми. */
-  @Query(
-      """
-      SELECT l FROM ExpenseLimitEntity l
-      WHERE l.accountFrom = :accountFrom
-      ORDER BY l.limitDatetime DESC
-      """)
-  List<ExpenseLimitEntity> findAllByAccount(@Param("accountFrom") String accountFrom);
-
   /**
    * Лимит, установленный ровно в этот момент. Запрос точечный, а не поиск «последнего»: уникальное
    * ограничение {@code uc_expense_limit_instant} гарантирует не более одного такого лимита.

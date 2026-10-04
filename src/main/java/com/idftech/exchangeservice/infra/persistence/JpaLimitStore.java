@@ -41,12 +41,6 @@ public class JpaLimitStore implements LimitStore {
 
   @Override
   @Transactional(readOnly = true)
-  public List<ExpenseLimit> findAllByAccount(String accountFrom) {
-    return repository.findAllByAccount(accountFrom).stream().map(this::toDomain).toList();
-  }
-
-  @Override
-  @Transactional(readOnly = true)
   public Optional<ExpenseLimit> findAtInstant(
       String accountFrom, ExpenseCategory category, Instant limitDatetime) {
     return repository.findAtInstant(accountFrom, category, limitDatetime).map(this::toDomain);

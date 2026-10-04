@@ -17,9 +17,6 @@ public interface LimitStore {
    */
   List<ExpenseLimit> findLimitsInPeriod(String accountFrom, ExpenseCategory category, BudgetPeriod period);
 
-  /** Все лимиты счёта, новые первыми. */
-  List<ExpenseLimit> findAllByAccount(String accountFrom);
-
   /**
    * Лимит, установленный ровно в этот момент, либо пусто.
    *

@@ -1,19 +1,20 @@
 package com.idftech.exchangeservice.api.error;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.idftech.exchangeservice.application.exception.ConflictException;
 import com.idftech.exchangeservice.application.exception.ResourceNotFoundException;
 import com.idftech.exchangeservice.application.exception.UnprocessableEntityException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
+import java.lang.reflect.RecordComponent;
 import java.net.URI;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.TypeMismatchException;
 import org.springframework.core.Ordered;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import java.lang.reflect.RecordComponent;
 import org.springframework.core.annotation.Order;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -38,9 +39,8 @@ import tools.jackson.databind.exc.UnrecognizedPropertyException;
  * <p>Формат один для всех ошибок: клиенту достаточно разбирать {@code type}, {@code title},
  * {@code status}, {@code detail} и расширения. Коды заданы собственным URI-пространством
  * {@code /problems/...}, чтобы их можно было документировать в OpenAPI.
- */
-/**
- * Порядок важнее, чем кажется.
+ *
+ * <h2>Порядок обработчиков важнее, чем кажется</h2>
  *
  * <p>Spring Boot 4 регистрирует собственный {@code ProblemDetailsExceptionHandler}, который
  * обрабатывает вообще любое исключение. Если у него нет явного порядка, он оказывается первым в
@@ -191,7 +191,7 @@ public class ProblemDetailExceptionHandler {
     problem.setType(VALIDATION_TYPE);
     problem.setTitle("Ошибка валидации");
     List<Map<String, String>> errors =
-        java.util.Arrays.stream(e.getConstraintViolations().toArray(ConstraintViolation[]::new))
+        Arrays.stream(e.getConstraintViolations().toArray(ConstraintViolation[]::new))
             .map(
                 violation ->
                     Map.of(

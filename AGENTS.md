@@ -18,7 +18,7 @@
 Нужен JDK 21. На macOS `JAVA_HOME=$(/usr/libexec/java_home -v 21)`. Нужен Docker для тестов.
 
 ```bash
-./mvnw test                                   # 172 теста, unit + интеграционные
+./mvnw test                                   # 176 тестов, unit + интеграционные
 ./mvnw test -Dtest=LimitCalculatorTest         # один набор
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
 ```

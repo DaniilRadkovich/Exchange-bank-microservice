@@ -81,6 +81,22 @@ class ApiErrorContractIntegrationTest extends AbstractIntegrationTest {
   }
 
   @Test
+  @DisplayName("Недостижимый Accept отвечает 406, а не падает в обработчик Exception")
+  void notAcceptableResponseTypeIsUnsupported() {
+    // Обработчик HttpMediaTypeNotAcceptableException есть, но без него запрос уехал бы в 500:
+    // advice перехватывает Exception и обходит DefaultHandlerExceptionResolver.
+    assertProblem(
+        given()
+            .accept("application/xml")
+            .queryParam("account_from", ACCOUNT)
+            .when()
+            .get("/api/v1/limits")
+            .then(),
+        406,
+        "https://exchangeservice.example.com/problems/unsupported-media-type");
+  }
+
+  @Test
   @DisplayName("Успешный ответ остаётся application/json, а не problem+json")
   void successIsNotServedAsProblemDetail() {
     given().queryParam("account_from", ACCOUNT).when().get("/api/v1/limits").then()
