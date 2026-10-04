@@ -31,6 +31,11 @@ import org.springframework.transaction.annotation.Transactional;
  * медленный, и держать HTTP-запрос на нём нельзя. Транзакция никогда не теряется: если курс получить
  * не удалось, она остаётся в статусе {@code PENDING} и будет дорасчитана фоновой обработкой.
  *
+ * <p>Ожидание клиента снимается событием приёма: зафиксированная строка ставит проход фоновой
+ * дорасчётки в очередь ({@link PendingSettlementScheduler#onTransactionAccepted}), поэтому флаг
+ * появляется сразу, а не через {@code exchange.settlement.retry-delay}. Плановый проход остаётся
+ * страховкой на случай, если событие не дошло.
+ *
  * <h2>Расчёт в две фазы</h2>
  *
  * <p>Досчёт пачки разделён на фазы, потому что они конкурируют за разные ресурсы:
@@ -69,6 +74,7 @@ public class TransactionIntakeService {
   private final SettlementProperties settlementProperties;
   private final Clock clock;
   private final java.util.concurrent.Executor settlementExecutor;
+  private final org.springframework.context.ApplicationEventPublisher events;
 
   public TransactionIntakeService(
       TransactionStore transactionStore,
@@ -78,7 +84,8 @@ public class TransactionIntakeService {
       SettlementProperties settlementProperties,
       Clock clock,
       @org.springframework.beans.factory.annotation.Qualifier("settlementExecutor")
-          java.util.concurrent.Executor settlementExecutor) {
+          java.util.concurrent.Executor settlementExecutor,
+      org.springframework.context.ApplicationEventPublisher events) {
     this.transactionStore = transactionStore;
     this.settlementApplier = settlementApplier;
     this.exchangeRateService = exchangeRateService;
@@ -86,6 +93,7 @@ public class TransactionIntakeService {
     this.settlementProperties = settlementProperties;
     this.clock = clock;
     this.settlementExecutor = settlementExecutor;
+    this.events = events;
   }
 
   /**
@@ -142,7 +150,13 @@ public class TransactionIntakeService {
       // Повторная доставка. Молча отдавать PENDING клиенту нельзя: он увидит «не рассчитано» вместо
       // уже известного ответа, хотя счёт по факту давно закрыт.
       log.info("Transaction {} already accepted with status {}; duplicate delivery ignored", stored.id(), stored.status());
+      return stored;
     }
+
+    // Событие публикуется внутри транзакции, а обрабатывается после её фиксации: до коммита строки
+    // в базе нет, и проход, поставленный сразу, её бы не нашёл. Повторной доставке событие не
+    // нужно: считать нечего, строка уже рассчитана или ждёт своей очереди.
+    events.publishEvent(new TransactionAccepted(stored.id()));
     return stored;
   }
 

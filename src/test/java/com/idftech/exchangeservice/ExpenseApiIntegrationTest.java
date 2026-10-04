@@ -11,6 +11,7 @@ import com.idftech.exchangeservice.application.LimitCommandService;
 import com.idftech.exchangeservice.application.TransactionIntakeService;
 import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseTransaction;
+import com.idftech.exchangeservice.domain.TransactionStatus;
 import io.restassured.RestAssured;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -40,6 +41,9 @@ class ExpenseApiIntegrationTest extends AbstractIntegrationTest {
   private static final String ACCOUNT = "0000000123";
   private static final String COUNTERPARTY = "0000009999";
   private static final AtomicInteger ID_SEQUENCE = new AtomicInteger();
+
+  /** Предел попыток дорасчёта из application-test.yaml: столько нужно, чтобы дойти до FAILED. */
+  private static final int MAX_ATTEMPTS = 5;
 
   @Autowired
   private TransactionIntakeService intakeService;
@@ -499,6 +503,61 @@ class ExpenseApiIntegrationTest extends AbstractIntegrationTest {
   }
 
   @Test
+  @DisplayName("POST /transactions/{id}/settle досчитывает операцию, дошедшую до FAILED")
+  void manualSettleRecoversFailedTransaction() {
+    // Статус FAILED означает «требуется ручной расчёт», и он обязан быть достижим: без такого
+    // эндпоинта операция навсегда осталась бы без курса и флага limit_exceeded.
+    stubRateProviderFailure();
+    String id = postForeignTransaction("10000.00", "2022-01-10T00:00:00Z");
+    for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      intakeService.settle(UUID.fromString(id));
+    }
+    assertThat(statusInDatabase(id)).isEqualTo(TransactionStatus.FAILED.name());
+
+    rateApi().resetAll();
+    stubRate("KZT", new BigDecimal("0.0025"));
+
+    given()
+        .when()
+        .post("/api/v1/transactions/{id}/settle", id)
+        .then()
+        .statusCode(200)
+        .body("status", equalTo("RATE_RESOLVED"))
+        .body("usd_rate", equalTo(0.0025f))
+        .body("amount_usd", equalTo(25.00f))
+        .body("limit_exceeded", equalTo(false));
+
+    assertThat(statusInDatabase(id)).isEqualTo(TransactionStatus.RATE_RESOLVED.name());
+  }
+
+  @Test
+  @DisplayName("POST /transactions/{id}/settle отвечает 202, пока курс недоступен")
+  void manualSettleReportsPendingWhenRateIsUnavailable() {
+    stubRateProviderFailure();
+    String id = postForeignTransaction("10000.00", "2022-01-10T00:00:00Z");
+
+    given()
+        .when()
+        .post("/api/v1/transactions/{id}/settle", id)
+        .then()
+        .statusCode(202)
+        .body("status", equalTo("PENDING"))
+        .body("amount_usd", nullValue());
+  }
+
+  @Test
+  @DisplayName("POST /transactions/{id}/settle для несуществующей операции отвечает 404")
+  void manualSettleOfUnknownTransactionIsNotFound() {
+    given()
+        .when()
+        .post("/api/v1/transactions/{id}/settle", UUID.randomUUID())
+        .then()
+        .statusCode(404)
+        .contentType("application/problem+json")
+        .body("resource", equalTo("transaction"));
+  }
+
+  @Test
   @DisplayName("Параллельная повторная доставка одного transaction_id не приводит к 409 и дублю")
   void concurrentDuplicateDeliveryIsAcceptedOnce() throws Exception {
     UUID id = nextId();
@@ -549,6 +608,26 @@ class ExpenseApiIntegrationTest extends AbstractIntegrationTest {
         .statusCode(202)
         .extract()
         .path("transaction_id");
+  }
+
+  /** Операция в валюте, курс которой берётся у внешнего API: без заглушки недоступна. */
+  private String postForeignTransaction(String sum, String datetime) {
+    Map<String, Object> body = new HashMap<>(transactionBody(sum, "product", datetime));
+    body.put("currency_shortname", "KZT");
+    return given()
+        .contentType("application/json")
+        .body(body)
+        .when()
+        .post("/api/v1/transactions")
+        .then()
+        .statusCode(202)
+        .extract()
+        .path("transaction_id");
+  }
+
+  private String statusInDatabase(String id) {
+    return jdbcTemplate.queryForObject(
+        "SELECT status FROM expense_transaction WHERE id = ?", String.class, UUID.fromString(id));
   }
 
   private Map<String, Object> transactionBody(String sum, String category, String datetime) {

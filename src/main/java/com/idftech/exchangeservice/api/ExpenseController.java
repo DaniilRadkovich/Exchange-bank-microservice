@@ -8,6 +8,7 @@ import com.idftech.exchangeservice.api.dto.TransactionResponse;
 import com.idftech.exchangeservice.application.LimitCommandService;
 import com.idftech.exchangeservice.application.LimitQueryService;
 import com.idftech.exchangeservice.application.TransactionIntakeService;
+import com.idftech.exchangeservice.application.exception.ResourceNotFoundException;
 import com.idftech.exchangeservice.domain.ExceededTransaction;
 import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseLimit;
@@ -93,8 +94,37 @@ public class ExpenseController {
     return intakeService
         .findById(transactionId)
         .map(TransactionResponse::of)
-        .orElseThrow(() -> new com.idftech.exchangeservice.application.exception.ResourceNotFoundException(
-            "transaction", transactionId.toString()));
+        .orElseThrow(() -> new ResourceNotFoundException("transaction", transactionId.toString()));
+  }
+
+  @PostMapping("/transactions/{transactionId}/settle")
+  @Operation(
+      summary = "Дорасчёт операции вручную",
+      description =
+          "Служебный сценарий для операции, у которой не сложился автоматический расчёт: курс не пришёл "
+              + "или расчёт упал и транзакция дошла до FAILED. Повторная попытка начинается с нуля, "
+              + "накопленная сумма месяца и флаги считаются заново, данные операции не меняются.")
+  @ApiResponses({
+    @ApiResponse(responseCode = "200", description = "Операция рассчитана: курс применён, флаг выставлен"),
+    @ApiResponse(
+        responseCode = "202",
+        description = "Попытка предпринята, но курс недоступен: операция осталась PENDING и ждёт следующего прохода"),
+    @ApiResponse(responseCode = "404", description = "Операция не найдена"),
+    @ApiResponse(responseCode = "500", description = "Внутренняя ошибка сервиса")
+  })
+  public ResponseEntity<TransactionResponse> settleTransaction(
+      @Parameter(description = "Идентификатор операции", required = true)
+          @PathVariable
+          UUID transactionId) {
+    ExpenseTransaction settled = intakeService.settle(transactionId);
+    if (settled == null) {
+      throw new ResourceNotFoundException("transaction", transactionId.toString());
+    }
+    // 202, а не 200 с телом PENDING: попытка состоялась, но результата ещё нет. Один код для обоих
+    // состояний заставлял бы клиента смотреть в тело, чтобы понять, посчитано или нет.
+    return settled.isResolved()
+        ? ResponseEntity.ok(TransactionResponse.of(settled))
+        : ResponseEntity.accepted().body(TransactionResponse.of(settled));
   }
 
   @PostMapping("/limits")

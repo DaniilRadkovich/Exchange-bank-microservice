@@ -5,7 +5,6 @@ import java.util.concurrent.ExecutorService;
 import javax.sql.DataSource;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
@@ -15,6 +14,13 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * {@code application.yaml}): по умолчанию в Spring Boot 4 они выключены, а для этого сервиса важны —
  * обработка транзакций состоит в основном из ожидания внешнего API.
  *
+ * <p>{@code @EnableAsync} здесь не нужен и раньше не был: ни одного {@code @Async}-метода в проекте
+ * нет, а задачи фоновой дорасчётки выполняются на собственном пуле {@link #settlementExecutor}.
+ * Аннотация была включена «на всякий случай» — то есть объявляла возможность, которой никто не
+ * пользуется, и читалась как работающая асинхронность, которой на самом деле не было. Событие
+ * приёма транзакции обрабатывается синхронно после фиксации, но тело обработчика только ставит
+ * задачу в очередь пула, а сам расчёт уходит на виртуальный поток.
+ *
  * <p>Пул расчёта объявлен безусловно, а не под тем же условием, что планировщик. Иначе интеграционные
  * тесты с {@code processing-enabled=false} не нашли бы бин и упали бы на старте контекста: такие
  * тесты отключают фоновый планировщик ради детерминизма, но досчёт вызывают вручную, и пул им нужен.
@@ -22,7 +28,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * {@code PendingSettlementScheduler}.
  */
 @Configuration
-@EnableAsync
 @EnableScheduling
 public class AsyncProcessingConfig {
 

@@ -56,8 +56,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/transactions",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "transactions"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions"
+              ]
             }
           },
           "event": [
@@ -97,8 +103,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/transactions",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "transactions"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions"
+              ]
             }
           }
         },
@@ -123,8 +135,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/transactions",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "transactions"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions"
+              ]
             }
           }
         },
@@ -149,8 +167,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/transactions",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "transactions"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions"
+              ]
             }
           }
         },
@@ -175,8 +199,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/transactions",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "transactions"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions"
+              ]
             }
           }
         },
@@ -187,9 +217,37 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/transactions/{{transactionId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "transactions", "{{transactionId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions",
+                "{{transactionId}}"
+              ]
             }
+          }
+        },
+        {
+          "name": "POST /api/v1/transactions/{id}/settle - manual re-settle",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions/{{transactionId}}/settle",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions",
+                "{{transactionId}}",
+                "settle"
+              ]
+            },
+            "description": "Ручной досчёт операции: 200 — посчитано, 202 — курс всё ещё недоступен, 404 — операции нет. Нужен для транзакций в статусе FAILED."
           }
         },
         {
@@ -199,8 +257,15 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/transactions/{{$guid}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "transactions", "{{$guid}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions",
+                "{{$guid}}"
+              ]
             }
           }
         }
