@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Логирование сервиса.
+
+  Файл один на все профили, а не «обычный в dev и JSON в prod»: логизация — это операционная
+  величина, и одинаковый формат в разработке и в контейнере снимает вопрос «а почему в проде
+  записи выглядят иначе». Уровни при этом остаются профильными: prod поднимает порог до WARN,
+  dev опускает свой пакет до DEBUG (см. application-dev.yaml и application-prod.yaml).
+
+  Имя logback-spring.xml, а не logback.xml: файл читается до поднятия контекста, поэтому в нём
+  доступен <springProfile>. Плюс он не перекрывается внешним logback.xml, который может положить
+  рядом операционная сборка.
+
+  Идентификатор приложения берётся из spring.application.name, чтобы записи в общем лог-сборщике
+  не требовали угадывания сервис по имени класса в логе.
+-->
+<configuration>
+    <springProperty scope="context" name="appName" source="spring.application.name"
+                    defaultValue="exchangeservice"/>
+
+    <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <customFields>{"application":"${appName}"}</customFields>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="JSON_CONSOLE"/>
+    </root>
+</configuration>

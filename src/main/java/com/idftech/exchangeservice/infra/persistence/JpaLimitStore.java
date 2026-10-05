@@ -24,9 +24,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class JpaLimitStore implements LimitStore {
 
   private final ExpenseLimitJpaRepository repository;
+  private final PersistenceMapper mapper;
 
-  public JpaLimitStore(ExpenseLimitJpaRepository repository) {
+  public JpaLimitStore(ExpenseLimitJpaRepository repository, PersistenceMapper mapper) {
     this.repository = repository;
+    this.mapper = mapper;
   }
 
   @Override
@@ -59,13 +61,7 @@ public class JpaLimitStore implements LimitStore {
   }
 
   private ExpenseLimit toDomain(ExpenseLimitEntity entity) {
-    return new ExpenseLimit(
-        entity.getId(),
-        entity.getAccountFrom(),
-        entity.getExpenseCategory(),
-        entity.getLimitSum(),
-        java.util.Currency.getInstance(entity.getLimitCurrency()),
-        entity.getLimitDatetime().atOffset(java.time.ZoneOffset.UTC));
+    return mapper.toDomain(entity);
   }
 
   /** Границы месяца в часовом поясе лимитов, представленные как полуинтервал {@code [start, end)}. */

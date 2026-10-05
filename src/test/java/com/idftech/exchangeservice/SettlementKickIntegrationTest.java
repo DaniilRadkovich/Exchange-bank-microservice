@@ -40,6 +40,9 @@ import org.springframework.test.context.ActiveProfiles;
  */
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+    // classes повторяется обязательно: своя аннотация @SpringBootTest в подклассе заменяет родительскую
+    // целиком, а вместе с ней теряется и бин контейнера — контекст поднялся бы без источника данных.
+    classes = AbstractIntegrationTest.InfrastructureTestConfiguration.class,
     properties = {
       "exchange.settlement.processing-enabled=true",
       "exchange.settlement.retry-delay=1h"

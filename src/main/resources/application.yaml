@@ -109,8 +109,7 @@ management:
       application: ${spring.application.name}
 
 logging:
+  # Формат вывода задаёт logback-spring.xml (JSON во всех профилях), здесь только уровни.
   level:
     root: INFO
     com.idftech.exchangeservice: INFO
-  pattern:
-    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] %logger{36} - %msg%n"

@@ -13,6 +13,8 @@ import java.time.ZoneOffset;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -38,7 +40,9 @@ import tools.jackson.databind.ObjectMapper;
  * {@code @DynamicPropertySource} как {@code exchange.rates.base-url}, поэтому клиент курсов
  * настраивается сам и ни одна настройка теста не дублируется вручную.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+    webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+    classes = AbstractIntegrationTest.InfrastructureTestConfiguration.class)
 @ActiveProfiles("test")
 @Import(AbstractIntegrationTest.ClockTestConfiguration.class)
 abstract class AbstractIntegrationTest {
@@ -51,20 +55,10 @@ abstract class AbstractIntegrationTest {
       new AtomicReference<>(OffsetDateTime.parse("2022-01-01T10:00:00Z"));
 
   /**
-   * PostgreSQL поднимается вручную, а не через аннотацию {@code @Container}.
-   *
-   * <p>Причина: расширение Testcontainers останавливает контейнер после каждого тестового класса. Spring
-   * при этом переиспользует кэшированный контекст приложения, и уже созданный пул соединений
-   * продолжает указывать на порт остановленного контейнера — следующий класс падает с
-   * «Connection refused» при вполне рабочей схеме. Один контейнер на весь прогон с неизменным
-   * портом, наоборот, позволяет переиспользовать один контекст и заметно ускоряет прогон.
+   * WireMock живёт весь прогон статикой: у него нет бина для {@code @ServiceConnection}, а контекст
+   * Spring кэшируется между тестовыми классами — пересоздавать заглушку внешнего API на каждый класс
+   * означало бы иной порт и потерянные счётчики одновременных обращений.
    */
-  private static final PostgreSQLContainer POSTGRES =
-      new PostgreSQLContainer("postgres:17-alpine")
-          .withDatabaseName("exchange")
-          .withUsername("exchange")
-          .withPassword("exchange");
-
   private static final WireMockServer RATE_API =
       new WireMockServer(
           WireMockConfiguration.options()
@@ -72,15 +66,8 @@ abstract class AbstractIntegrationTest {
               .extensions(ConcurrentRequestCounterHolder.TRANSFORMER));
 
   static {
-    POSTGRES.start();
     RATE_API.start();
-    Runtime.getRuntime()
-        .addShutdownHook(
-            new Thread(
-                () -> {
-                  RATE_API.stop();
-                  POSTGRES.stop();
-                }));
+    Runtime.getRuntime().addShutdownHook(new Thread(RATE_API::stop));
   }
 
   @LocalServerPort
@@ -95,11 +82,9 @@ abstract class AbstractIntegrationTest {
   @Autowired
   protected TestClock testClock;
 
+  /** Подключение к БД приходит из контейнера через {@code @ServiceConnection}, здесь только провайдер. */
   @DynamicPropertySource
-  static void infrastructureProperties(DynamicPropertyRegistry registry) {
-    registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
-    registry.add("spring.datasource.username", POSTGRES::getUsername);
-    registry.add("spring.datasource.password", POSTGRES::getPassword);
+  static void rateApiProperties(DynamicPropertyRegistry registry) {
     registry.add("exchange.rates.base-url", RATE_API::baseUrl);
     registry.add("exchange.rates.api-key", () -> "test-key");
   }
@@ -290,6 +275,32 @@ abstract class AbstractIntegrationTest {
 
     OffsetDateTime currentTime() {
       return currentTime.get();
+    }
+  }
+
+  /**
+   * PostgreSQL в Testcontainers, объявленный бином контекста.
+   *
+   * <p>Раньше контейнер поднимался вручную в статическом блоке, и это ломалось предсказуемо:
+   * расширение Testcontainers останавливает контейнер после каждого тестового класса, а Spring пере-
+   * жиспользует кэшированный контекст, и уже созданный пул соединений продолжает указывать на порт
+   * остановленного контейнера — следующий класс падал с «Connection refused» при вполне рабочей
+   * схеме. Объявление бином решает это на уровне жизненного цикла: контейнер принадлежит кэшу
+   * контекста, поэтому один контекст — один контейнер на все наследники.
+   *
+   * <p>Второй контекст (у {@code SettlementKickIntegrationTest} другие свойства) получит свой
+   * контейнер — это осознанно: у каждой конфигурации своя БД, и тесты не зависят от порядка.
+   */
+  @TestConfiguration(proxyBeanMethods = false)
+  static class InfrastructureTestConfiguration {
+
+    @Bean
+    @ServiceConnection
+    PostgreSQLContainer<?> postgres() {
+      return new PostgreSQLContainer<>("postgres:17-alpine")
+          .withDatabaseName("exchange")
+          .withUsername("exchange")
+          .withPassword("exchange");
     }
   }
 

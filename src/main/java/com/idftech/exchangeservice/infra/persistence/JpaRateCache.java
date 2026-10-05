@@ -4,7 +4,6 @@ import com.idftech.exchangeservice.application.port.RateCache;
 import com.idftech.exchangeservice.domain.ExchangeRate;
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.Currency;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Repository;
@@ -18,9 +17,11 @@ public class JpaRateCache implements RateCache {
   private static final String USD = "USD";
 
   private final ExchangeRateJpaRepository repository;
+  private final PersistenceMapper mapper;
 
-  public JpaRateCache(ExchangeRateJpaRepository repository) {
+  public JpaRateCache(ExchangeRateJpaRepository repository, PersistenceMapper mapper) {
     this.repository = repository;
+    this.mapper = mapper;
   }
 
   @Override
@@ -49,13 +50,7 @@ public class JpaRateCache implements RateCache {
   }
 
   private ExchangeRate toDomain(ExchangeRateEntity entity) {
-    return new ExchangeRate(
-        entity.getId(),
-        Currency.getInstance(entity.getBaseCurrency()),
-        Currency.getInstance(entity.getQuoteCurrency()),
-        entity.getRateDate(),
-        entity.getCloseRate(),
-        entity.getPreviousClose());
+    return mapper.toDomain(entity);
   }
 
   private BigDecimal applicableRate(ExchangeRateEntity entity) {

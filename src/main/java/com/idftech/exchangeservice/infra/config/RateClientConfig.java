@@ -3,6 +3,7 @@ package com.idftech.exchangeservice.infra.config;
 import com.idftech.exchangeservice.application.config.RateProviderProperties;
 import com.idftech.exchangeservice.infra.rate.RetryingCaller;
 import com.idftech.exchangeservice.infra.rate.TwelveDataRateProvider;
+import com.idftech.exchangeservice.infra.rate.TwelveDataTimeSeriesClient;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.net.http.HttpClient;
 import java.time.Duration;
@@ -11,6 +12,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.support.RestClientAdapter;
+import org.springframework.web.service.invoker.HttpServiceProxyFactory;
 
 /**
  * Конфигурация HTTP-клиента внешнего источника курсов.
@@ -42,6 +45,30 @@ public class RateClientConfig {
   }
 
   /**
+   * HTTP Interface внешнего API курсов.
+   *
+   * <p>Клиент-интерфейс строится поверх того же {@link RestClient}, что и раньше: базовый адрес,
+   * фабрика запросов с таймаутами установки соединения и чтения приходят оттуда. Ключ добавляется
+   * заголовком по умолчанию, а не параметром метода, поэтому он не может случайно попасть в лог и не
+   * дублируется в каждом вызове.
+   *
+   * <p>Объявлять интерфейс бином нужно здесь же: {@code @EnableHttpServiceClient} не включён, потому
+   * что провайдеров может быть несколько и каждый переиспользует один и тот же HTTP-клиент.
+   */
+  @Bean
+  public TwelveDataTimeSeriesClient twelveDataTimeSeriesClient(
+      RestClient rateProviderRestClient, RateProviderProperties properties) {
+    RestClient authorized =
+        rateProviderRestClient
+            .mutate()
+            .defaultHeader("Authorization", "apikey " + properties.apiKey())
+            .build();
+    return HttpServiceProxyFactory.builderFor(RestClientAdapter.create(authorized))
+        .build()
+        .createClient(TwelveDataTimeSeriesClient.class);
+  }
+
+  /**
    * Провайдер курсов по умолчанию.
    *
    * <p>Условие по {@code exchange.rates.provider} — не украшение: без него свойство в конфигурации
@@ -62,11 +89,10 @@ public class RateClientConfig {
       havingValue = "twelvedata",
       matchIfMissing = true)
   public TwelveDataRateProvider twelveDataRateProvider(
-      RestClient rateProviderRestClient,
+      TwelveDataTimeSeriesClient timeSeriesClient,
       RateProviderProperties properties,
       RetryingCaller retryingCaller,
       MeterRegistry meterRegistry) {
-    return new TwelveDataRateProvider(
-        rateProviderRestClient, properties, retryingCaller, meterRegistry);
+    return new TwelveDataRateProvider(timeSeriesClient, properties, retryingCaller, meterRegistry);
   }
 }

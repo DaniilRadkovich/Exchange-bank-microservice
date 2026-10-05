@@ -109,16 +109,19 @@ public class JpaTransactionStore implements TransactionStore {
   private final ExpenseTransactionJpaRepository repository;
   private final LimitAnalyticsQueryRepository analyticsRepository;
   private final LimitProperties limitProperties;
+  private final PersistenceMapper mapper;
 
   public JpaTransactionStore(
       EntityManager entityManager,
       ExpenseTransactionJpaRepository repository,
       LimitAnalyticsQueryRepository analyticsRepository,
-      LimitProperties limitProperties) {
+      LimitProperties limitProperties,
+      PersistenceMapper mapper) {
     this.entityManager = entityManager;
     this.repository = repository;
     this.analyticsRepository = analyticsRepository;
     this.limitProperties = limitProperties;
+    this.mapper = mapper;
   }
 
   /**
@@ -422,17 +425,6 @@ public class JpaTransactionStore implements TransactionStore {
   }
 
   private ExpenseTransaction toDomain(ExpenseTransactionEntity entity) {
-    return new ExpenseTransaction(
-        entity.getId(),
-        entity.getAccountFrom(),
-        entity.getAccountTo(),
-        Currency.getInstance(entity.getCurrencyCode()),
-        entity.getAmount(),
-        entity.getExpenseCategory(),
-        entity.getOccurredAt().atOffset(ZoneOffset.UTC),
-        entity.getUsdRate(),
-        entity.getAmountUsd(),
-        entity.getStatus(),
-        entity.getLimitExceeded());
+    return mapper.toDomain(entity);
   }
 }

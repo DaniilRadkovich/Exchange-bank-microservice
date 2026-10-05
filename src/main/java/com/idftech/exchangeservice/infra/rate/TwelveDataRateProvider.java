@@ -16,7 +16,6 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.web.client.RestClient;
 
 /**
  * Адаптер внешнего источника курсов — Twelve Data {@code /time_series}.
@@ -39,7 +38,7 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
   private static final String USD = "USD";
   private static final int HISTORY_DAYS = 7;
 
-  private final RestClient restClient;
+  private final TwelveDataTimeSeriesClient timeSeries;
   private final RateProviderProperties properties;
   private final RetryingCaller retryingCaller;
   private final Timer requestTimer;
@@ -47,11 +46,11 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
   private final Counter failureCounter;
 
   public TwelveDataRateProvider(
-      RestClient restClient,
+      TwelveDataTimeSeriesClient timeSeries,
       RateProviderProperties properties,
       RetryingCaller retryingCaller,
       MeterRegistry meterRegistry) {
-    this.restClient = restClient;
+    this.timeSeries = timeSeries;
     this.properties = properties;
     this.retryingCaller = retryingCaller;
 
@@ -151,22 +150,16 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
   }
 
   private TimeSeriesResponse request(String symbol, LocalDate start, LocalDate end) {
-    return restClient
-        .get()
-        .uri(
-            uriBuilder -> uriBuilder
-                .path("/time_series")
-                .queryParam("symbol", symbol)
-                .queryParam("interval", "1day")
-                .queryParam("start_date", start.toString())
-                .queryParam("end_date", end.toString())
-                .queryParam("previous_close", true)
-                .queryParam("order", "asc")
-                .queryParam("outputsize", HISTORY_DAYS + 1)
-                .build())
-        .header("Authorization", "apikey " + properties.apiKey())
-        .retrieve()
-        .body(TimeSeriesResponse.class);
+    // Параметры запроса и адрес объявлены в TwelveDataTimeSeriesClient: здесь только значения,
+    // которые зависят от даты операции.
+    return timeSeries.timeSeries(
+        symbol,
+        TwelveDataTimeSeriesClient.INTERVAL_DAILY,
+        start.toString(),
+        end.toString(),
+        true,
+        TwelveDataTimeSeriesClient.ORDER_ASC,
+        HISTORY_DAYS + 1);
   }
 
   /**

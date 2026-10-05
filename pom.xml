@@ -29,6 +29,7 @@
   </scm>
   <properties>
     <java.version>21</java.version>
+    <mapstruct.version>1.6.3</mapstruct.version>
     <springdoc.version>3.1.1</springdoc.version>
     <wiremock.version>3.13.1</wiremock.version>
     <logstash-logback-encoder.version>9.0</logstash-logback-encoder.version>
@@ -52,6 +53,13 @@
       <groupId>org.projectlombok</groupId>
       <artifactId>lombok</artifactId>
       <optional>true</optional>
+    </dependency>
+    <!-- Преобразования сущность <-> домен генерируются, а не перечисляются руками: иначе новое поле
+         в домене молча не попадало бы в преобразование, и ошибка вылезала бы на null в расчёте. -->
+    <dependency>
+      <groupId>org.mapstruct</groupId>
+      <artifactId>mapstruct</artifactId>
+      <version>${mapstruct.version}</version>
     </dependency>
     <dependency>
       <groupId>org.postgresql</groupId>
@@ -87,6 +95,14 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- @ServiceConnection: контейнер объявляется бином тестового контекста, поэтому его жизненный
+         цикл совпадает с кэшем контекста Spring и переиспользуется между тестовыми классами.
+         Без этого артефакта аннотации нет, а контейнер пришлось бы поднимать вручную. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-testcontainers</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -129,6 +145,11 @@
               <groupId>org.projectlombok</groupId>
               <artifactId>lombok</artifactId>
               <version>${lombok.version}</version>
+            </path>
+            <path>
+              <groupId>org.mapstruct</groupId>
+              <artifactId>mapstruct-processor</artifactId>
+              <version>${mapstruct.version}</version>
             </path>
           </annotationProcessorPaths>
         </configuration>
