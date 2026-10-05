@@ -68,8 +68,6 @@ public record RateProviderProperties(
       retryMaxBackoff = Duration.ofSeconds(2);
     }
     if (maxFallbackAge == null || maxFallbackAge.isNegative() || maxFallbackAge.isZero()) {
-      // Неделя покрывает выходные и длинные праздники, но не даёт подставить курс полугодовой
-      // давности операции, ушедшей в прошлое.
       maxFallbackAge = Duration.ofDays(7);
     }
   }

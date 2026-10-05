@@ -26,30 +26,30 @@ import java.time.OffsetDateTime;
  */
 public record TransactionRequest(
     @NotBlank
-        @Pattern(regexp = "\\d{10}", message = "must contain exactly 10 digits")
+        @Pattern(regexp = "\\d{10}", message = "Must contain exactly 10 digits")
         @JsonProperty("account_from")
         String accountFrom,
     @NotBlank
-        @Pattern(regexp = "\\d{10}", message = "must contain exactly 10 digits")
+        @Pattern(regexp = "\\d{10}", message = "Must contain exactly 10 digits")
         @JsonProperty("account_to")
         String accountTo,
     @NotBlank
         @Size(min = 3, max = 3)
-        @Pattern(regexp = "[A-Za-z]{3}", message = "must be a 3-letter ISO 4217 code")
+        @Pattern(regexp = "[A-Za-z]{3}", message = "Must be a 3-letter ISO 4217 code")
         @JsonProperty("currency_shortname")
         String currencyShortname,
     @NotNull
-        @DecimalMin(value = "0.01", message = "must be greater than zero")
-        @Digits(integer = 17, fraction = 2, message = "must have at most 2 decimal places")
+        @DecimalMin(value = "0.01", message = "Must be greater than zero")
+        @Digits(integer = 17, fraction = 2, message = "Must have at most 2 decimal places")
         @JsonProperty("sum")
         BigDecimal sum,
     @NotBlank
-        @Pattern(regexp = "(?i)product|service", message = "must be either 'product' or 'service'")
+        @Pattern(regexp = "(?i)product|service", message = "Must be either 'product' or 'service'")
         @JsonProperty("expense_category")
         String expenseCategory,
     @NotNull @JsonProperty("datetime") OffsetDateTime datetime,
     @Pattern(
             regexp = "^$|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
-            message = "must be a UUID in canonical 8-4-4-4-12 form, or omitted")
+            message = "Must be a UUID in canonical 8-4-4-4-12 form, or omitted")
         @JsonProperty("transaction_id")
         String transactionId) {}

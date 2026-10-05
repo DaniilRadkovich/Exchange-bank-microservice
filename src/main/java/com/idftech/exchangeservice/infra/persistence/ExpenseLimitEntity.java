@@ -30,8 +30,6 @@ public class ExpenseLimitEntity {
   @Column(name = "account_from", nullable = false, length = 10)
   private String accountFrom;
 
-  // Конвертер, а не @Enumerated: явный @Enumerated имеет приоритет над autoApply-конвертерами
-  // и записал бы PRODUCT вместо product, что нарушает CHECK-ограничение в схеме.
   @Column(name = "expense_category", nullable = false, length = 16)
   private ExpenseCategory expenseCategory;
 
@@ -39,8 +37,6 @@ public class ExpenseLimitEntity {
   private BigDecimal limitSum;
 
   @Column(name = "limit_currency", nullable = false, length = 3, columnDefinition = "bpchar(3)")
-  // char(3), а не varchar: код валюты всегда ровно три знака, и CHAR не дополняет его
-  // пробелами при чтении. Тип задан явно, иначе Hibernate ожидает varchar и validate падает.
   private String limitCurrency;
 
   @Column(name = "limit_datetime", nullable = false)

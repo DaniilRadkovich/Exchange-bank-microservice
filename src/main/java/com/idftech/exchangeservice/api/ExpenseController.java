@@ -122,8 +122,6 @@ public class ExpenseController {
     if (settled == null) {
       throw new ResourceNotFoundException("transaction", transactionId.toString());
     }
-    // 202, а не 200 с телом PENDING: попытка состоялась, но результата ещё нет. Один код для обоих
-    // состояний заставлял бы клиента смотреть в тело, чтобы понять, посчитано или нет.
     return settled.isResolved()
         ? ResponseEntity.ok(TransactionResponse.of(settled))
         : ResponseEntity.accepted().body(TransactionResponse.of(settled));

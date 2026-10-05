@@ -47,9 +47,6 @@ import org.mapstruct.ReportingPolicy;
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface PersistenceMapper {
 
-  // withLimitExceeded — не колонка, а доменный помощник «копия с новым флагом». MapStruct видит в нём
-  // флюентный сеттер и ждёт значения из источника; параметр при этом примитивный, а в сущности поле
-  // Boolean, поэтому «пропуск» пришлось бы объявить явно, а не замаскировать настройкой политики.
   @Mapping(target = "withLimitExceeded", ignore = true)
   @Mapping(target = "category", source = "expenseCategory")
   @Mapping(target = "currency", source = "currencyCode", qualifiedByName = "currencyOf")

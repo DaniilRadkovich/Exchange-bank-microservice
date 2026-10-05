@@ -4,11 +4,6 @@
 счёта, переводит их в USD по биржевому курсу закрытия и помечает операции, превысившие месячный
 лимит. Лимиты ведутся раздельно для категорий `product` и `service`.
 
-Реализация тестового задания
-`Тестовое_задание_Junior_Java_разработчика_2026.pdf`: пункты 1–6 обязательные выполнены полностью, из
-необязательных сделаны 1\* (параллельный расчёт на виртуальных потоках), 3\* (Docker и compose) и
-5\* (Actuator и метрики), а также 4\* (CI) и 6\* (AGENTS.md).
-
 ## Стек
 
 Java 21, Spring Boot 4.1.1, Spring Web MVC на виртуальных потоках, Spring Data JPA, Liquibase
@@ -41,12 +36,11 @@ EXCHANGE_READONLY_PASSWORD=<пароль пользователя БД толь�
 подготовка БД не нужна.
 
 ```bash
-# PostgreSQL для ручного запуска сервиса
 docker run -d --name exchange-db -p 5432:5432 \
   -e POSTGRES_DB=exchange -e POSTGRES_USER=exchange -e POSTGRES_PASSWORD=exchange \
   postgres:17-alpine
 
-set -a && source .env && set +a   # Spring Boot файл .env не читает, переменные нужны в окружении
+set -a && source .env && set +a
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 

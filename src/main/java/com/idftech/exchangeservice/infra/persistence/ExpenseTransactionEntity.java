@@ -37,14 +37,11 @@ public class ExpenseTransactionEntity {
   private String accountTo;
 
   @Column(name = "currency_code", nullable = false, length = 3, columnDefinition = "bpchar(3)")
-  // char(3), а не varchar: код валюты всегда ровно три знака, и CHAR не дополняет его
-  // пробелами при чтении. Тип задан явно, иначе Hibernate ожидает varchar и validate падает.
   private String currencyCode;
 
   @Column(name = "amount", nullable = false, precision = 19, scale = 2)
   private BigDecimal amount;
 
-  // Конвертер, а не @Enumerated: см. ExpenseLimitEntity — @Enumerated перебил бы autoApply.
   @Column(name = "expense_category", nullable = false, length = 16)
   private ExpenseCategory expenseCategory;
 

@@ -23,13 +23,9 @@ public class ExchangeRateEntity {
   private UUID id;
 
   @Column(name = "base_currency", nullable = false, length = 3, columnDefinition = "bpchar(3)")
-  // char(3), а не varchar: код валюты всегда ровно три знака, и CHAR не дополняет его
-  // пробелами при чтении. Тип задан явно, иначе Hibernate ожидает varchar и validate падает.
   private String baseCurrency;
 
   @Column(name = "quote_currency", nullable = false, length = 3, columnDefinition = "bpchar(3)")
-  // char(3), а не varchar: код валюты всегда ровно три знака, и CHAR не дополняет его
-  // пробелами при чтении. Тип задан явно, иначе Hibernate ожидает varchar и validate падает.
   private String quoteCurrency;
 
   @Column(name = "rate_date", nullable = false)

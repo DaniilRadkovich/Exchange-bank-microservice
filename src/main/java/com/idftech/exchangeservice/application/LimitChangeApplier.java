@@ -69,8 +69,6 @@ public class LimitChangeApplier {
       OffsetDateTime now,
       BudgetPeriod period) {
 
-    // Проверка и вставка идут под блокировкой периода: без неё два параллельных запроса прошли бы
-    // проверку одновременно и оба записали бы лимит на один момент.
     transactionStore.lockPeriod(accountFrom, category, period);
     if (limitStore.findAtInstant(accountFrom, category, now.toInstant()).isPresent()) {
       throw new ConflictException(
@@ -83,8 +81,6 @@ public class LimitChangeApplier {
     ExpenseLimit limit = ExpenseLimit.create(UUID.randomUUID(), accountFrom, category, limitSum, now);
     ExpenseLimit saved = limitStore.save(limit);
 
-    // Флаги операций, уже рассчитанных под прежним порогом, с новым лимитом не согласуются: те же
-    // суммы, другой порог.
     settlementApplier.recalculatePeriod(accountFrom, category, period);
 
     log.info(

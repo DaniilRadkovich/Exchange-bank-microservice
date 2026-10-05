@@ -44,8 +44,6 @@ public record ExchangeRate(
     Objects.requireNonNull(base, "base");
     Objects.requireNonNull(quote, "quote");
     Objects.requireNonNull(rateDate, "rateDate");
-    // close и previousClose взаимно не исключают друг друга: биржа может вернуть только одно из них,
-    // а применимый курс выбирается в applicableRate().
   }
 
   /** Курс, применимый к дате операции: close, а при его отсутствии — previous_close (ТЗ п.3). */

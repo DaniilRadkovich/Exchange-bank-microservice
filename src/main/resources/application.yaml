@@ -33,9 +33,6 @@ spring:
   jackson:
     default-property-inclusion: non_null
     deserialization:
-      # Неизвестное поле в теле — ошибка формата, а не тихо проигнорированное значение. Иначе
-      # клиент отправлял бы limit_datetime в POST /limits, думая, что задаёт дату, а сервик её
-      # игнорировал, и получал 201 с другой датой.
       fail-on-unknown-properties: true
 
   mvc:
@@ -44,48 +41,23 @@ spring:
 
 exchange:
   limit:
-    # Лимит по умолчанию, если клиент его не устанавливал (ТЗ п.2).
-    # Часового пояса здесь нет: границы месяца определены BudgetPeriod.LIMIT_TIMEZONE (UTC).
     default-sum: 1000.00
     default-currency: USD
   rates:
-    # Внешний провайдер дневных курсов; конкретный API выбирается в README.
-    # Значение выбирает бин адаптера (@ConditionalOnProperty в RateClientConfig), поэтому
-    # незнакомое значение останавливает старт, а не подставляет молча провайдера по умолчанию.
     provider: ${RATES_API_PROVIDER:twelvedata}
     base-url: ${RATES_API_BASE_URL:https://api.twelvedata.com}
-    # Ключ приходит только из переменной окружения, значение по умолчанию пустое: секрет в
-    # репозитории не лежит, а сервис без ключа не поднимается (@NotBlank в RateProviderProperties).
     api-key: ${RATES_API_KEY:}
     connect-timeout: 2s
     read-timeout: 3s
-    # Насколько старым может быть резервный курс, если в БД нет закрытия на дату операции.
-    # Курс недельной давности — это уже другой рынок, и молча подставлять его в лимит опаснее,
-    # чем вернуть клиенту ошибку расчёта. После истечения срока транзакция уходит в FAILED
-    # и ждёт либо операции, либо ручного дорасчёта.
     max-fallback-age: 7d
-    # Число повторов при 5xx/таймауте; задержка растёт экспоненциально.
     max-retries: 3
     retry-initial-backoff: 200ms
     retry-max-backoff: 2s
   settlement:
-    # Сколько попыток дорасчёта до перевода транзакции из PENDING в FAILED.
     max-attempts: 5
-    # Пауза между плановыми проходами дорасчётки. Это страховка, а не основной темп: проход
-    # запускается ещё и по событию приёма операции, поэтому флаг limit_exceeded появляется сразу.
-    # Объявлена один раз: планировщик читает её отсюда же, поэтому второй default в коде разъехался бы
-    # с этим значением при первом же изменении.
     retry-delay: 5s
-    # Сколько транзакций планировщик берёт за один проход. Пачка целиком уходит в пул расчёта,
-    # поэтому размер влияет на число занятых соединений PostgreSQL.
     batch-size: 100
-    # Фоновая дорасчётка транзакций: и проход по событию приёма, и плановый проход. В тестах
-    # выключается (см. application-test.yaml), чтобы результат проверки не зависел от фоновой
-    # задачи, запущенной приёмом.
     processing-enabled: true
-    # Сколько транзакций дорасчитывается одновременно (ТЗ п.1*). Виртуальные потоки не ограничивают
-    # число задач, а каждая задача занимает соединение пула PostgreSQL, поэтому граница обязана быть
-    # не больше размера пула.
     parallelism: 16
 
 springdoc:
@@ -102,14 +74,12 @@ management:
         include: health,info,metrics,prometheus
   endpoint:
     health:
-      # Сервис не закрыт Spring Security, поэтому when-authorized не показывал бы детали никогда.
       show-details: always
   observations:
     key-values:
       application: ${spring.application.name}
 
 logging:
-  # Формат вывода задаёт logback-spring.xml (JSON во всех профилях), здесь только уровни.
   level:
     root: INFO
     com.idftech.exchangeservice: INFO

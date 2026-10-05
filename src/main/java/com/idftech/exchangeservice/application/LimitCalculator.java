@@ -9,13 +9,11 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.OffsetDateTime;
-import java.time.YearMonth;
 import java.util.Currency;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -44,11 +42,32 @@ import java.util.UUID;
  */
 public class LimitCalculator {
 
+  /**
+   * Порядок идентификаторов при равном времени операции — обязано совпадать с PostgreSQL.
+   *
+   * <p>Флаг {@code limit_exceeded} считает приложение, а накопленную сумму для клиента отдаёт SQL
+   * (ТЗ п.6). При равных {@code occurred_at} обе стороны упорядочивают операции по {@code id}, и
+   * если порядок разойдётся, накопленная сумма в ответе будет посчитана для другой операции, чем
+   * флаг: клиент увидит «превышение» с чужой суммой.
+   *
+   * <p>Расхождение реальное, а не теоретическое: {@link java.util.UUID#compareTo} сравнивает
+   * половинки как знаковые {@code long}, то есть для UUID с установленным старшим битом первого
+   * полу-слова знак отрицательный. PostgreSQL сравнивает 16 байт беззнаково. Идентификаторы вида
+   * {@code 00000000-0000-0000-0000-00000000000N} в обоих порядках совпадают — поэтому расхождение
+   * не видно на тестовых идентификаторах, но проявляется на случайных UUID из {@code UUID.randomUUID()},
+   * то есть на реальных данных клиента.
+   *
+   * <p>Сравнение ниже повторяет порядок PostgreSQL: побайтно, беззнаково, от старшего байта к
+   * младшему. Это ровно лексикографический порядок канонического текста UUID в нижнем регистре.
+   */
+  private static final java.util.Comparator<java.util.UUID> LIMIT_TIE_BREAK =
+      (left, right) -> left.toString().compareTo(right.toString());
   /** Точность сумм при сравнении с лимитом: копейки. */
   private static final int USD_SCALE = 2;
 
   private final LimitProperties limitProperties;
   private final Clock clock;
+
 
   public LimitCalculator(LimitProperties limitProperties, Clock clock) {
     this.limitProperties = limitProperties;
@@ -220,31 +239,10 @@ public class LimitCalculator {
   private static boolean exceeds(BigDecimal runningTotalUsd, BigDecimal limitSum) {
     return runningTotalUsd.compareTo(limitSum) > 0;
   }
-
   /**
    * Группа, в пределах которой суммы накапливаются: лимит в ТЗ принадлежит паре «категория +
    * месяц», поэтому расходы соседней категории или соседнего месяца в накопленный итог не входят.
    */
-  public record SpendingScope(ExpenseCategory category, BudgetPeriod period) {}
 
-  /**
-   * Порядок идентификаторов при равном времени операции — обязано совпадать с PostgreSQL.
-   *
-   * <p>Флаг {@code limit_exceeded} считает приложение, а накопленную сумму для клиента отдаёт SQL
-   * (ТЗ п.6). При равных {@code occurred_at} обе стороны упорядочивают операции по {@code id}, и
-   * если порядок разойдётся, накопленная сумма в ответе будет посчитана для другой операции, чем
-   * флаг: клиент увидит «превышение» с чужой суммой.
-   *
-   * <p>Расхождение реальное, а не теоретическое: {@link java.util.UUID#compareTo} сравнивает
-   * половинки как знаковые {@code long}, то есть для UUID с установленным старшим битом первого
-   * полу-слова знак отрицательный. PostgreSQL сравнивает 16 байт беззнаково. Идентификаторы вида
-   * {@code 00000000-0000-0000-0000-00000000000N} в обоих порядках совпадают — поэтому расхождение
-   * не видно на тестовых идентификаторах, но проявляется на случайных UUID из {@code UUID.randomUUID()},
-   * то есть на реальных данных клиента.
-   *
-   * <p>Сравнение ниже повторяет порядок PostgreSQL: побайтно, беззнаково, от старшего байта к
-   * младшему. Это ровно лексикографический порядок канонического текста UUID в нижнем регистре.
-   */
-  private static final java.util.Comparator<java.util.UUID> LIMIT_TIE_BREAK =
-      (left, right) -> left.toString().compareTo(right.toString());
+  public record SpendingScope(ExpenseCategory category, BudgetPeriod period) {}
 }

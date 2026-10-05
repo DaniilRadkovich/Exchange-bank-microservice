@@ -73,9 +73,6 @@ public class LimitCommandService {
         OffsetDateTime.now(clock.withZone(BudgetPeriod.LIMIT_TIMEZONE)).truncatedTo(ChronoUnit.MICROS);
     BudgetPeriod period = BudgetPeriod.of(now);
 
-    // Результат дожидается: пересчёт флагов обязан завершиться до ответа клиенту, иначе он увидит
-    // новый лимит со старыми флагами. Ожидание не занимает соединение — его держит задача пула, а не
-    // поток запроса.
     return awaitLimitChange(
         () -> limitChangeApplier.apply(accountFrom, category, limitSum, now, period));
   }

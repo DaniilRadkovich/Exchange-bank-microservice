@@ -73,9 +73,6 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
       missCounter.increment();
       return direct;
     }
-    // Обратная пара. Не все валюты котируются к USD напрямую: тенге, например, у Twelve Data есть
-    // только как USD/KZT, а KZT/USD даёт 404 «symbol is missing or invalid». Брать курс из обратной
-    // пары и обращать его — значит не терять операции из-за того, как провайдер нарезал символы.
     Optional<ExchangeRate> inverted = invertedRate(baseCurrency, date);
     if (inverted.isPresent()) {
       missCounter.increment();
@@ -117,8 +114,6 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
    * {@link ExchangeRate#applicableRate()} требует {@code RATE_SCALE}.
    */
   private Optional<ExchangeRate> invertedRate(String baseCurrency, LocalDate date) {
-    // toExchangeRate гарантирует, что хотя бы одно из значений пригодно, поэтому applicableRate()
-    // здесь не бросает: нулевой курс от провайдера отсекается ещё в positive().
     Optional<ExchangeRate> inverse = rateFor(USD + "/" + baseCurrency, baseCurrency, date);
     if (inverse.isEmpty()) {
       return Optional.empty();
@@ -150,8 +145,6 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
   }
 
   private TimeSeriesResponse request(String symbol, LocalDate start, LocalDate end) {
-    // Параметры запроса и адрес объявлены в TwelveDataTimeSeriesClient: здесь только значения,
-    // которые зависят от даты операции.
     return timeSeries.timeSeries(
         symbol,
         TwelveDataTimeSeriesClient.INTERVAL_DAILY,
@@ -214,9 +207,6 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
       }
     }
 
-    // Торгов за целевую дату не было (выходной или праздник): берём последнее доступное закрытие.
-    // Именно последнее не позже целевой даты, а не последнее в ответе: провайдеру нельзя доверять
-    // границы запроса, а закрытие будущего дня не имеет отношения к операции прошедшего дня.
     TimeSeriesResponse.SeriesValue last = lastNotAfter(values, date);
     BigDecimal fallback = last == null ? null : positive(last.closeAsBigDecimal());
     if (fallback == null && last != null) {
@@ -266,7 +256,6 @@ public class TwelveDataRateProvider implements ExchangeRateProvider {
     }
     String trimmed = raw.trim();
     try {
-      // Для interval=1day Twelve Data отдаёт дату, но строка может содержать время.
       return LocalDate.parse(trimmed.length() > 10 ? trimmed.substring(0, 10) : trimmed);
     } catch (DateTimeParseException e) {
       log.debug("Unparseable datetime from rate provider: {}", raw);

@@ -74,8 +74,6 @@ public class SettlementApplier {
       return transaction;
     }
 
-    // Блокируем период до любого чтения накопленной суммы: иначе параллельный поток успел бы
-    // прочитать ту же сумму, что и этот.
     BudgetPeriod period = transaction.period();
     transactionStore.lockPeriod(transaction.accountFrom(), transaction.category(), period);
 
@@ -159,15 +157,8 @@ public class SettlementApplier {
 
   private ExpenseTransaction settleWithRate(
       ExpenseTransaction transaction, BudgetPeriod period, BigDecimal rate) {
-    // Курс применён, флаг ещё не рассчитан: сначала кандидат без флага, чтобы посчитать накопленную
-    // сумму периода вместе с ним. Сборку кандидата делает домен (ExpenseTransaction.resolved), иначе
-    // округление курса и произведение amount × rate жили бы в двух местах и разъехались бы.
     ExpenseTransaction resolvedCandidate = transaction.resolved(rate, false);
 
-    // Только суффикс периода, начиная с расчётной операции. У стоящих раньше накопленная сумма не
-    // меняется, поэтому их флаги пересчитывать незачем, а накопленный итог до них даёт база одной
-    // строкой. Читать весь период на каждый расчёт — значит платить за пачку квадратично: на 800
-    // операциях одного месяца это десятки секунд вместо секунд.
     List<ExpenseTransaction> suffix =
         withCandidate(
             transactionStore.findResolvedInPeriodFrom(
@@ -182,8 +173,6 @@ public class SettlementApplier {
         limitStore.findLimitsInPeriod(transaction.accountFrom(), transaction.category(), period);
     ExpenseLimit effectiveLimit = limitCalculator.effectiveLimit(resolvedCandidate, limits);
 
-    // Флаги суффикса считаются с накопленного итога, и флаг самой операции — первый из них. Отдельный
-    // пооперационный расчёт дал бы то же значение, но стал бы вторым правилом для одной величины.
     Map<UUID, Boolean> flags =
         limitCalculator.computeFlags(
             ordered,

@@ -10,9 +10,6 @@
 лимит. Лимит ведётся для пары «счёт + категория (`product`/`service`)», по умолчанию 1000 USD.
 Границы месяца — **UTC**.
 
-Спецификация: `Тестовое_задание_Junior_Java_разработчика_2026.pdf`. Подробности решений — в
-`README.md`.
-
 ## Команды
 
 Нужен JDK 21. На macOS `JAVA_HOME=$(/usr/libexec/java_home -v 21)`. Нужен Docker для тестов.
@@ -339,7 +336,8 @@
   `ExpenseApiIntegrationTest#nonUuidTransactionIdIsBadRequest` и
   `#emptyTransactionIdIsAcceptedAndGenerated`.
 - **Одна реализация расхода и остатка — SQL.** Не возвращай `LimitCalculator.remaining` и подобное:
-  вторая реализация того же правила разойдётся с нативным запросом `findLimitsWithSpent`, и клиент
+  вторая реализация того же правила разойдётся с нативным запросом `findLimitsWithSpentAmount`,
+   и клиент
   увидит остаток, не согласующийся с `limit_exceeded`.
 
 ## Тестовые конвенции

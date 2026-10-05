@@ -144,8 +144,6 @@ public class PendingSettlementScheduler {
       } while (passRequested.get());
     } finally {
       passRunning.set(false);
-      // Запрос мог прийти в окне между последней проверкой и снятием флага: тогда проход уже не
-      // владеет циклом и подхватить запрос обязан новый.
       if (passRequested.get()) {
         enqueue();
       }

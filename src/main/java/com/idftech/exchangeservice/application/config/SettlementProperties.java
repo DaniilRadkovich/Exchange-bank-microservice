@@ -4,7 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
 /**
- * Настройки до расчёта транзакций, принятых асинхронно.
+ * Настройки дорасчёта транзакций, принятых асинхронно.
  *
  * <p>Составлен только из того, что читает код. {@code retry-delay} и {@code processing-enabled} в
  * записи не дублируются: первый потребляет планировщик как placeholder в {@code @Scheduled}, второе

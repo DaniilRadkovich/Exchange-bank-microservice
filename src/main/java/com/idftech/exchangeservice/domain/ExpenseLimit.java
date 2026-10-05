@@ -31,7 +31,6 @@ public record ExpenseLimit(
   public static final int USD_SCALE = 2;
 
   public ExpenseLimit {
-    // id может быть null: лимит по умолчанию не хранится в БД, см. javadoc типа.
     Objects.requireNonNull(accountFrom, "accountFrom");
     Objects.requireNonNull(category, "category");
     Objects.requireNonNull(limitSum, "limitSum");

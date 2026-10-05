@@ -25,7 +25,6 @@ exchange:
     default-currency: USD
   rates:
     provider: twelvedata
-    # URL заглушки переопределяется в @DynamicPropertySource на порт WireMock.
     base-url: http://localhost:0
     api-key: test-key
     connect-timeout: 1s
@@ -38,8 +37,6 @@ exchange:
     retry-delay: 100ms
     batch-size: 100
     processing-enabled: false
-    # Тесты проверяют параллельный расчёт пачки, поэтому лимит не должен быть равен единице:
-    # иначе тесты на параллельность проходили бы на последовательном исполнении.
     parallelism: 16
 
 logging:

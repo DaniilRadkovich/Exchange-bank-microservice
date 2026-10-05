@@ -29,6 +29,8 @@ public record ExpenseTransaction(
 
   /** Точность суммы в USD — два знака после точки, как в формате ответа ТЗ. */
   public static final int USD_SCALE = 2;
+  private static final String USD_CURRENCY_CODE = "USD";
+
 
   public ExpenseTransaction {
     Objects.requireNonNull(id, "id");
@@ -93,6 +95,4 @@ public record ExpenseTransaction(
   public static BigDecimal toUsd(BigDecimal amount, BigDecimal rate) {
     return amount.multiply(rate).setScale(USD_SCALE, RoundingMode.HALF_UP);
   }
-
-  private static final String USD_CURRENCY_CODE = "USD";
 }

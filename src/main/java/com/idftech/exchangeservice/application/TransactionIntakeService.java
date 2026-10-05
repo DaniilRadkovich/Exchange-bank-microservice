@@ -153,15 +153,10 @@ public class TransactionIntakeService {
 
     ExpenseTransaction stored = transactionStore.saveIfAbsent(pending);
     if (stored.status() != pending.status()) {
-      // Повторная доставка. Молча отдавать PENDING клиенту нельзя: он увидит «не рассчитано» вместо
-      // уже известного ответа, хотя счёт по факту давно закрыт.
       log.info("Transaction {} already accepted with status {}; duplicate delivery ignored", stored.id(), stored.status());
       return stored;
     }
 
-    // Событие публикуется внутри транзакции, а обрабатывается после её фиксации: до коммита строки
-    // в базе нет, и проход, поставленный сразу, её бы не нашёл. Повторной доставке событие не
-    // нужно: считать нечего, строка уже рассчитана или ждёт своей очереди.
     events.publishEvent(new TransactionAccepted(stored.id()));
     return stored;
   }
@@ -202,7 +197,6 @@ public class TransactionIntakeService {
           exchangeRateService.resolveUsdRate(
               transaction.currency().getCurrencyCode(), rateDate(transaction));
     } catch (RuntimeException e) {
-      // Сбой нашей стороны, а не недоступность биржи: по правилу 3 наружу выходит только он.
       registerFailedAttempt(transactionId, e);
       throw e;
     }
@@ -330,8 +324,6 @@ public class TransactionIntakeService {
                 failed.cause());
       }
     } catch (RateCallCancelledException e) {
-      // Отмена, а не неудача: попытка засчитана при взятии, и её надо снять, иначе при
-      // max-attempts: 1 остановка сервиса переводила бы транзакции в FAILED.
       log.info("Settlement of transaction {} cancelled; attempt not counted", transaction.id());
       settlementApplier.releaseClaim(transaction.id());
       return;

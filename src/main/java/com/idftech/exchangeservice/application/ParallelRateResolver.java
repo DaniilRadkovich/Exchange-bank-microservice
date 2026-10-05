@@ -137,7 +137,6 @@ public class ParallelRateResolver {
     } catch (RuntimeException e) {
       Throwable cause = e.getCause() == null ? e : e.getCause();
       if (cause instanceof Error fatal) {
-        // Исчерпание памяти и подобное — не повод считать попытки дорасчёта.
         throw fatal;
       }
       return RateResolution.failed(

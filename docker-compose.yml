@@ -1,7 +1,7 @@
 # Запуск сервиса вместе с БД одной командой:
 #   docker compose up --build
 # Swagger UI: http://localhost:8080/swagger-ui.html
-# Логи сервиса в этом compose — JSON (профиль prod, см. application-prod.yaml и logback-prod.xml).
+# Логи сервиса в этом compose — JSON: формат задаёт logback-spring.xml, уровни — профилем prod.
 # Локальная разработка с отладочным выводом и SQL — ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
 #
 # Ключ внешнего API курсов и пароль пользователя БД только для чтения задаются окружением.
@@ -40,8 +40,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      # Профиль prod включает JSON-логи (logback-prod.xml) и убирает show-sql. Без него compose
-      # поднимал бы контейнер, в котором logback-prod.xml лежит мёртвым файлом.
+      # Профиль prod поднимает порог логирования до WARN и убирает show-sql.
       SPRING_PROFILES_ACTIVE: prod
       DB_URL: jdbc:postgresql://postgres:5432/exchange
       DB_USERNAME: exchange

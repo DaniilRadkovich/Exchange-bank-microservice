@@ -21,15 +21,15 @@ import java.math.BigDecimal;
  */
 public record CreateLimitRequest(
     @NotBlank
-        @Pattern(regexp = "\\d{10}", message = "must contain exactly 10 digits")
+        @Pattern(regexp = "\\d{10}", message = "Must contain exactly 10 digits")
         @JsonProperty("account_from")
         String accountFrom,
     @NotBlank
-        @Pattern(regexp = "(?i)product|service", message = "must be either 'product' or 'service'")
+        @Pattern(regexp = "(?i)product|service", message = "Must be either 'product' or 'service'")
         @JsonProperty("expense_category")
         String expenseCategory,
     @NotNull
-        @DecimalMin(value = "0.01", message = "must be greater than zero")
-        @Digits(integer = 17, fraction = 2, message = "must have at most 2 decimal places")
+        @DecimalMin(value = "0.01", message = "Must be greater than zero")
+        @Digits(integer = 17, fraction = 2, message = "Must have at most 2 decimal places")
         @JsonProperty("limit_sum")
         BigDecimal limitSum) {}

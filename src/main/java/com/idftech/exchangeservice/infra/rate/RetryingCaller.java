@@ -53,7 +53,6 @@ public class RetryingCaller {
 
     for (int attempt = 1; attempt <= attempts; attempt++) {
       if (Thread.currentThread().isInterrupted()) {
-        // Поток прерён до вызова: попытка не началась, поэтому и жаловаться провайдеру не на что.
         throw new RateCallCancelledException(
             operationName + " cancelled before attempt " + attempt + ": thread is interrupted", null);
       }

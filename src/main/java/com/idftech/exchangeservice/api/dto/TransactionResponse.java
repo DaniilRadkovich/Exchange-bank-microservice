@@ -6,7 +6,6 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
-/** Ответ по состоянию расчёта транзакции; используется также в ответе {@code POST /transactions}. */
 public record TransactionResponse(
     @JsonProperty("transaction_id") UUID transactionId,
     @JsonProperty("account_from") String accountFrom,

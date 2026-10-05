@@ -141,12 +141,8 @@ public class ExchangeRateService {
     try {
       fetched = rateProvider.fetchDailyRate(currencyCode, date);
     } catch (RateCallCancelledException e) {
-      // Отмена, а не отказ: ни провайдер, ни наша БД ни при чём. Возвращать пустой результат
-      // нельзя — попытка дорасчёта была бы засчитана как неудача, и при max-attempts: 1 остановка
-      // сервиса переводила бы транзакции в FAILED.
       throw e;
     } catch (RuntimeException e) {
-      // Внешний API недоступен: не роняем приём транзакций, а возвращаем пустой результат.
       log.warn("External rate provider failed for {}/{} on {}: {}", currencyCode, USD, date, e.toString());
       return Optional.empty();
     }
