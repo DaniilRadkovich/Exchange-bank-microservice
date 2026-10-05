@@ -5,7 +5,6 @@ import com.idftech.exchangeservice.application.exception.RateCallCancelledExcept
 import com.idftech.exchangeservice.application.exception.UnprocessableEntityException;
 import com.idftech.exchangeservice.application.port.TransactionStore;
 import com.idftech.exchangeservice.domain.BudgetPeriod;
-import com.idftech.exchangeservice.domain.ExceededTransaction;
 import com.idftech.exchangeservice.domain.ExpenseCategory;
 import com.idftech.exchangeservice.domain.ExpenseTransaction;
 import com.idftech.exchangeservice.domain.TransactionStatus;
@@ -242,12 +241,34 @@ public class TransactionIntakeService {
   /**
    * Берёт пачку в дорасчёт: блокирует строки и засчитывает им попытку одной транзакцией.
    *
-   * <p>Отдельный метод, а не {@code findPending}, потому что взятие пачки обязано быть атомарным:
-   * обычный {@code SELECT} позволял двум задачам взять одни и те же строки. Здесь же попытка
-   * засчитывается сразу — сбой между взятием и расчётом не оставит транзакцию с незасчитанной
+   * <p>Отдельный метод, а не {@link #findPending(int)}, потому что взятие пачки обязано быть
+   * атомарным: обычный {@code SELECT} позволял двум задачам взять одни и те же строки. Здесь же
+   * попытка засчитывается сразу — сбой между взятием и расчётом не оставит транзакцию с незасчитанной
    * попыткой.
+   *
+   * <p><b>Аннотации {@code @Transactional} здесь нет намеренно.</b> Транзакцию открывает адаптер
+   * ({@code JpaTransactionStore.claimPending}), и требование к атомарности зафиксировано в контракте
+   * порта, а не здесь. Причин две:
+   *
+   * <ul>
+   *   <li>{@link #settlePending(int)} вызывает этот метод напрямую, а {@code @Transactional} работает
+   *       на прокси: на этом пути (горячем, его зовёт и планировщик, и досчёт по событию приёма)
+   *       аннотация всё равно не действовала бы. Метод, который объявляет транзакцию только на
+   *       одном из двух путей, — ловушка для следующего разработчика: он справедливо добавит сюда
+   *       ещё запрос к хранилищу и не увидит, что два вызова оказались в разных транзакциях.
+   *   <li>Повесив аннотацию на {@code #settlePending(int)}, чтобы «значения совпали», мы получили бы
+   *       обратное: транзакция {@code REQUIRED} захватила бы и взятие пачки, и сетевые запросы курсов,
+   *       то есть соединение PostgreSQL удерживалось бы всё время ожидания внешнего API, а
+   *       {@code SELECT ... FOR UPDATE SKIP LOCKED} не отпустил бы строки до конца пачки. Это прямо
+   *       запрещено правилами 8 и 9.
+   * </ul>
+   *
+   * <p>Так же сделано в {@link #settle(UUID)} и в {@code LimitCommandService.createLimit}: соединение
+   * не берётся на потоке HTTP-запроса, а транзакционная работа живёт в аппликаторах.
+   *
+   * @param batchSize максимальный размер пачки
+   * @return взятые в обработку транзакции в порядке времени совершения
    */
-  @Transactional
   public List<ExpenseTransaction> claimPending(int batchSize) {
     return transactionStore.claimPending(settlementProperties.maxAttempts(), batchSize);
   }
